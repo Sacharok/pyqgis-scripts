@@ -1,0 +1,87 @@
+WITH phg AS (
+    SELECT u."Id"
+    FROM "UndergroundGasStorages" u
+    JOIN "GtsPoints" p
+        ON p."Id" = u."Id"
+    WHERE p."Name" ILIKE '%Аманское%'
+)
+SELECT
+    s."Id" AS segment_id,
+    gp."Name" AS gas_pipeline,
+    s."StartKilometer",
+    s."Length",
+
+    CASE
+        WHEN s."StartGtsPointId" = phg."Id"
+            THEN s."EndGtsPointId"
+        ELSE s."StartGtsPointId"
+    END AS connected_point_id,
+
+    CASE
+        WHEN s."StartGtsPointId" = phg."Id"
+            THEN p_end."Name"
+        ELSE p_start."Name"
+    END AS connected_point_name,
+
+    CASE
+        WHEN cs."Id" IS NOT NULL THEN 'КС'
+        WHEN cp."Id" IS NOT NULL THEN 'Точка подключения'
+        ELSE 'Другая точка'
+    END AS connected_point_type
+
+FROM phg
+JOIN "GasPipeSegments" s
+    ON s."StartGtsPointId" = phg."Id"
+    OR s."EndGtsPointId" = phg."Id"
+
+LEFT JOIN "GtsPoints" p_start
+    ON p_start."Id" = s."StartGtsPointId"
+
+LEFT JOIN "GtsPoints" p_end
+    ON p_end."Id" = s."EndGtsPointId"
+
+LEFT JOIN "GasPipelines" gp
+    ON gp."Id" = s."GasPipelineId"
+
+LEFT JOIN "CompressionStations" cs
+    ON cs."Id" =
+        CASE
+            WHEN s."StartGtsPointId" = phg."Id"
+                THEN s."EndGtsPointId"
+            ELSE s."StartGtsPointId"
+        END
+
+LEFT JOIN "ConnectionPoints" cp
+    ON cp."Id" =
+        CASE
+            WHEN s."StartGtsPointId" = phg."Id"
+                THEN s."EndGtsPointId"
+            ELSE s."StartGtsPointId"
+        END;
+
+
+
+
+....
+WITH phg AS (
+    SELECT u."Id"
+    FROM "UndergroundGasStorages" u
+    JOIN "GtsPoints" p
+        ON p."Id" = u."Id"
+    WHERE p."Name" ILIKE '%Аманское%'
+)
+SELECT
+    s."StartKilometer",
+    s."Length",
+
+    CASE
+        WHEN s."StartGtsPointId" = phg."Id"
+            THEN s."StartKilometer"
+        ELSE s."StartKilometer" + s."Length"
+    END AS possible_connection_km
+
+FROM phg
+JOIN "GasPipeSegments" s
+    ON s."StartGtsPointId" = phg."Id"
+    OR s."EndGtsPointId" = phg."Id";
+
