@@ -1,0 +1,94 @@
+SELECT
+    p."Name",
+    p."InZoneId",
+    p."OutZoneId"
+FROM "GasMeasuringStations" g
+JOIN "GtsPoints" p
+    ON p."Id" = g."Id"
+ORDER BY p."Name";
+
+
+SELECT
+    p."Name" AS gis_name,
+    iz."Name" AS in_zone,
+    oz."Number" AS out_zone
+FROM "GasMeasuringStations" g
+JOIN "GtsPoints" p
+    ON p."Id" = g."Id"
+LEFT JOIN "InZones" iz
+    ON iz."Id" = p."InZoneId"
+LEFT JOIN "OutZones" oz
+    ON oz."Id" = p."OutZoneId"
+ORDER BY p."Name";
+
+
+
+
+SELECT
+    p."Name" AS gis_name,
+    gp."Name" AS gas_pipeline,
+    s."StartKilometer",
+    s."Length",
+
+    CASE
+        WHEN s."StartGtsPointId" = g."Id"
+            THEN other_end."Name"
+        ELSE other_start."Name"
+    END AS connected_point_name
+
+FROM "GasMeasuringStations" g
+
+JOIN "GtsPoints" p
+    ON p."Id" = g."Id"
+
+JOIN "GasPipeSegments" s
+    ON s."StartGtsPointId" = g."Id"
+    OR s."EndGtsPointId" = g."Id"
+
+LEFT JOIN "GasPipelines" gp
+    ON gp."Id" = s."GasPipelineId"
+
+LEFT JOIN "GtsPoints" other_start
+    ON other_start."Id" = s."StartGtsPointId"
+
+LEFT JOIN "GtsPoints" other_end
+    ON other_end."Id" = s."EndGtsPointId"
+
+ORDER BY p."Name", gp."Name", s."StartKilometer";
+
+
+
+
+
+SELECT
+    gis_point."Name" AS gis_name,
+    connected_point."Name" AS connected_point,
+    connected_point."InZoneId",
+    connected_point."OutZoneId",
+    iz."Name" AS in_zone,
+    oz."Number" AS out_zone
+
+FROM "GasMeasuringStations" g
+
+JOIN "GtsPoints" gis_point
+    ON gis_point."Id" = g."Id"
+
+JOIN "GasPipeSegments" s
+    ON s."StartGtsPointId" = g."Id"
+    OR s."EndGtsPointId" = g."Id"
+
+JOIN "GtsPoints" connected_point
+    ON connected_point."Id" =
+        CASE
+            WHEN s."StartGtsPointId" = g."Id"
+                THEN s."EndGtsPointId"
+            ELSE s."StartGtsPointId"
+        END
+
+LEFT JOIN "InZones" iz
+    ON iz."Id" = connected_point."InZoneId"
+
+LEFT JOIN "OutZones" oz
+    ON oz."Id" = connected_point."OutZoneId"
+
+ORDER BY gis_point."Name";
