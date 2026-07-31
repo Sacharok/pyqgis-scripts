@@ -1,0 +1,82 @@
+CREATE TABLE public."OT_Truboprovod_P_klass_prav"
+(
+    id uuid NOT NULL,
+    project_id uuid NULL,
+    geom geometry(Point, 3857) NULL,
+    class_code varchar(255) NULL,
+    class_name varchar(255) NULL,
+    naim_tr varchar(255) NULL,
+    naim varchar(255) NULL,
+    rasp_piket varchar(255) NULL,
+    funk_nazn varchar(255) NULL,
+    teh_hrkt text NULL,
+    primechan text NULL,
+
+    CONSTRAINT "OT_Truboprovod_P_klass_prav_pkey"
+        PRIMARY KEY (id)
+);
+
+
+
+DO $$
+DECLARE
+    codes text[] := ARRAY['YUNG'];
+    code text;
+BEGIN
+    FOREACH code IN ARRAY codes
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS dzo varchar(10)',
+            'OT_Truboprovod_P_' || code || '_klass_prav'
+        );
+
+        EXECUTE format(
+            'UPDATE public.%I SET dzo = %L',
+            'OT_Truboprovod_P_' || code || '_klass_prav',
+            code
+        );
+
+        EXECUTE format(
+            $sql$
+            INSERT INTO public."OT_Truboprovod_P_klass_prav"
+            (
+                id,
+                project_id,
+                geom,
+                class_code,
+                class_name,
+                naim_tr,
+                naim,
+                rasp_piket,
+                funk_nazn,
+                teh_hrkt,
+                primechan,
+                dzo
+            )
+            SELECT
+                id,
+                project_id,
+                geom,
+                class_code,
+                class_name,
+                naim_tr,
+                naim,
+                rasp_piket,
+                funk_nazn,
+                teh_hrkt,
+                primechan,
+                dzo
+            FROM public.%I
+            $sql$,
+            'OT_Truboprovod_P_' || code || '_klass_prav'
+        );
+    END LOOP;
+END $$;
+
+
+
+ALTER TABLE public."OT_Truboprovod_P_klass_prav"
+ADD COLUMN dzo varchar(10);
+
+
+
