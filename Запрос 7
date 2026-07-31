@@ -1,0 +1,77 @@
+SELECT
+    ordinal_position,
+    column_name,
+    data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'PurposesOfPipelineNetworkObjects'
+ORDER BY ordinal_position;
+
+
+
+SELECT *
+FROM public."PurposesOfPipelineNetworkObjects"
+ORDER BY 2;
+
+
+
+SELECT
+    src.funk_nazn,
+    count(*) AS source_count,
+    count(ref.id) AS matched_count
+FROM dblink(
+    'host=... port=5432 dbname=normalization user=... password=...',
+    $$
+    SELECT funk_nazn
+    FROM public."OT_Truboprovod_P_klass_prav"
+    WHERE NULLIF(btrim(funk_nazn), '') IS NOT NULL
+    $$
+) AS src(funk_nazn varchar)
+LEFT JOIN public."PurposesOfPipelineNetworkObjects" ref
+    ON lower(btrim(ref.naim)) = lower(btrim(src.funk_nazn))
+GROUP BY src.funk_nazn
+ORDER BY matched_count, src.funk_nazn;
+
+
+
+
+
+
+SELECT
+    src.naim_tr,
+    count(*) AS point_count,
+    count(p.id) AS matched_rows,
+    count(DISTINCT p.id) AS matched_pipelines
+FROM dblink(
+    'host=... port=5432 dbname=normalization user=... password=...',
+    $$
+    SELECT naim_tr
+    FROM public."OT_Truboprovod_P_klass_prav"
+    WHERE NULLIF(btrim(naim_tr), '') IS NOT NULL
+    $$
+) AS src(naim_tr varchar)
+LEFT JOIN public."Pipelines" p
+    ON lower(btrim(p.naim_tr)) = lower(btrim(src.naim_tr))
+GROUP BY src.naim_tr
+ORDER BY matched_pipelines, src.naim_tr;
+
+
+
+SELECT count(*) AS existing_objects
+FROM public."CompositionOfLinearObject" c
+JOIN dblink(
+    'host=... port=5432 dbname=normalization user=... password=...',
+    'SELECT id FROM public."OT_Truboprovod_P_klass_prav"'
+) AS src(id uuid)
+    ON src.id = c.id;
+
+
+
+
+SELECT count(*) AS existing_links
+FROM public."CompositionOfLinearObjectPipelines" cp
+JOIN dblink(
+    'host=... port=5432 dbname=normalization user=... password=...',
+    'SELECT id FROM public."OT_Truboprovod_P_klass_prav"'
+) AS src(id uuid)
+    ON src.id = cp.id;
