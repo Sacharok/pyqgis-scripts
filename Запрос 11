@@ -1,0 +1,55 @@
+INSERT INTO public."OT_Truboprovod_P"
+(
+    id,
+    project_id,
+    geom,
+    class_code,
+    class_name,
+    naim_tr,
+    naim,
+    rasp_piket,
+    funk_nazn,
+    teh_hrkt,
+    primechan
+)
+SELECT
+    uuid_generate_v4() AS id,
+    src.project_id,
+    src.geom,
+    src.class_code,
+    src.class_name,
+    src.naim_tr,
+    src.naim,
+    src.rasp_piket,
+    src.funk_nazn,
+    src.teh_hrkt,
+    src.primechan
+FROM dblink(
+    'host=АДРЕС_СЕРВЕРА port=5432 dbname=normalization user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ',
+    $sql$
+        SELECT
+            project_id,
+            geom,
+            class_code,
+            class_name,
+            naim_tr,
+            naim,
+            rasp_piket,
+            funk_nazn,
+            teh_hrkt,
+            primechan
+        FROM public."OT_Truboprovod_P_klass_prav"
+    $sql$
+) AS src
+(
+    project_id uuid,
+    geom geometry(Point, 3857),
+    class_code varchar(255),
+    class_name varchar(255),
+    naim_tr varchar(255),
+    naim varchar(255),
+    rasp_piket varchar(255),
+    funk_nazn varchar(255),
+    teh_hrkt text,
+    primechan text
+);
