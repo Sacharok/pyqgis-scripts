@@ -1,0 +1,92 @@
+-- очистка дочерних bgd --
+
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_P_klass_prav';
+	v_target_table text := 'OT_Truboprovod_P';
+	v_db text;
+	v_conn_str text;
+	v_bgd_conn_str text;
+	remote_sql text;
+	v_sql text;
+	v_count text;
+begin
+	for v_db in
+		select distinct d.dzo
+		from dblink(
+			'host= port=5432 dbname=normalize user= password= options=-csearch_path=ready',
+			'select dzo from "OT_Truboprovod_P_klass_prav" where dzo is not null')
+		as d(dzo varchar(5))
+	loop
+		v_bgd_conn_str := format('host= port=5432 dbname=bgd_%s user= password=', v_db);
+		v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123', '');
+		v_sql := format('truncate table "%s"',
+			v_target_table
+		);
+		remote_sql := format('select dblink_exec(
+			''%s'', 
+			%L);', v_bgd_conn_str, v_sql);
+		raise notice 'SQL for db %: %', v_db, remote_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;		
+	end loop;
+end $$;
+
+-- заполнение дочерних bgd --
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_P_klass_prav';
+	v_target_table text := 'OT_Truboprovod_P';
+	v_db text;
+	v_conn_str text;
+	v_bgd_conn_str text;
+	remote_sql text;
+	v_sql text;
+	v_count text;
+begin
+	for v_db in
+		select distinct d.dzo
+		from dblink(
+			'host= port= dbname=normalize user= password= options=-csearch_path=ready',
+			'select dzo from "OT_Truboprovod_P_klass_prav" where dzo is not null')
+		as d(dzo varchar(5))
+	loop
+		v_bgd_conn_str := format('host= port=5432 dbname=bgd_%s user= password=', v_db);
+		v_conn_str := format('host= port=5432 dbname=normalize user= password=', '');
+		v_sql := format('
+			insert into %I (id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan)
+			select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+			from dblink(''%s'', 
+				''select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+				from %I
+				where dzo = ''%L'''')
+			as t(id uuid, geom geometry(Point,3857), class_code character varying(10), class_name character varying(100),
+				 naim_tr character varying(255), naim character varying(255), rasp_piket character varying(255),
+				 funk_nazn character varying(255), teh_hrkt text, primechan text)',
+			v_target_table,
+			v_conn_str,
+			v_source_table,
+			v_db
+		);
+		remote_sql := format('select dblink_exec(
+			''%s'', 
+			%L);', v_bgd_conn_str, v_sql);
+		raise notice 'SQL for db %: %', v_db, remote_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;		
+	end loop;
+end $$;
