@@ -1,0 +1,77 @@
+insert into public."CompositionOfLinearObject"
+(id, naim, teh_hrkt, primechan)
+select n.id, n.naim, n.teh_hrkt, n.primechan
+from dblink('dbname=normalize',
+	'select id, naim, teh_hrkt, primechan
+	 from ready."OT_Truboprovod_P_klass_prav"')
+as n(id uuid, naim text, teh_hrkt text,
+	primechan text)
+on conflict (id) do nothing;
+
+update public."CompositionOfLinearObject" ld
+set funk_nazn = pdo.id
+from dblink('dbname=normalize',
+	'select id, funk_nazn
+	 from ready."OT_Truboprovod_P_klass_prav" where funk_nazn is not null')
+as n(id uuid, funk_nazn varchar(255))
+join public."PurposesOfPipelineNetworkObjects" pdo on n.funk_nazn = pdo.naim
+where ld.id  = n.id;
+
+-- заполнение пикетов --
+insert into public."CompositionOfLinerObjectPikets" (id, rasp_piket, "CreatedAt", "UpdatedAt", "IsBlocked")
+select distinct n.id, trim(unnest(string_to_array(n.rasp_piket, ';'))), now(), now(), false 
+from dblink(
+	'dbname=normalize',
+	'select id, rasp_piket from "OT_Truboprovod_P_klass_prav"') 
+as n(id uuid, rasp_piket text) 
+where not exists
+(
+select 1
+from public."CompositionOfLinerObjectPikets" as ex
+where ex.id = n.id
+);
+
+with source as (
+select remote_data.id, unnest(string_to_array(remote_data.naim_tr, ';')) as pipeline_name
+from dblink('dbname=normalize',
+	'select id, naim_tr
+	 from ready."OT_Truboprovod_P_klass_prav" where naim_tr is not null')
+	 as remote_data(id uuid, naim_tr text)
+)
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select distinct on (sd.id, trim(sd.pipeline_name))
+sd.id, p.id, now(), now(), false
+from source sd
+join public."Pipelines" p on trim(p.naim_tr) = trim(sd.pipeline_name)
+on conflict (id, naim_tr) do nothing;
+
+select cp.id from public."CompositionOfLinearObject" cp
+where not exists
+(
+select from public."CompositionOfLinearObjectPipelines" c
+where cp.id = c.id
+);
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '561eb2b2-7224-4529-897a-f677ece3b0d2', 'b6df793f-fb31-4efa-9765-085d3eb7e3ee', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '01dff258-9a13-4d8f-9167-8a73a7be73cd', '9ef92c82-2691-4bf6-b4e8-1aa34a5ce82a', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '269e141d-30ee-4f4a-98ad-a11fde453afd', 'bbdb4cfc-5f83-43ef-b95b-d244f7c3e080', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'a5ebbf56-9604-4947-b898-a7599d69741b', 'b6df793f-fb31-4efa-9765-085d3eb7e3ee', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '9b8ab0ee-4c65-4da7-b204-bf6c860468e9', 'ef58d9df-62ce-4f9f-8cd4-9a95ea14094d', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '6e06cc99-a2ed-4642-b16b-8eaad71465fc', 'ea92cb8d-c059-4871-87d0-bce81e9e150b', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '783ffea1-0173-4266-91ab-8c6c0176b6e5', 'b18610fd-54aa-4051-8ea4-612c6e190f06', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'c83a9802-a70e-4643-bc06-5cef97c70a06', 'b18610fd-54aa-4051-8ea4-612c6e190f06', now(), now(), false;
