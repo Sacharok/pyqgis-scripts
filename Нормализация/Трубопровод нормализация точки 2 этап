@@ -1,0 +1,557 @@
+/*
+ЭТАП 2. ТОЧЕЧНЫЕ ОБЪЕКТЫ ТРУБОПРОВОДОВ
+Сначала диагностика, затем (по явному переключателю) загрузка.
+
+ВАЖНО:
+1) По умолчанию v_do_load = false — целевые таблицы НЕ изменяются.
+2) После проверки результатов поменять v_do_load на true и запустить скрипт заново.
+3) Имя таблицы CompositionOfLinerObjectPikets сохранено ровно как в исходном рабочем SQL.
+4) Источник во всех запросах используется один и тот же:
+   ready."OT_Truboprovod_P_klass_prav" в БД normalize.
+*/
+
+DROP TABLE IF EXISTS tmp_stage2_config;
+CREATE TEMP TABLE tmp_stage2_config (
+    do_load boolean NOT NULL
+);
+
+-- ПЕРЕКЛЮЧАТЕЛЬ ЗАГРУЗКИ:
+-- false = только проверить
+-- true  = выполнить загрузку, если нет ошибок уровня ERROR
+INSERT INTO tmp_stage2_config(do_load)
+VALUES (false);
+
+
+-- ============================================================
+-- 1. ОДИН РАЗ ПОЛУЧАЕМ НОРМАЛИЗОВАННЫЕ ДАННЫЕ ЧЕРЕЗ DBLINK
+-- ============================================================
+
+DROP TABLE IF EXISTS tmp_point_source;
+CREATE TEMP TABLE tmp_point_source (
+    id          uuid,
+    naim        text,
+    teh_hrkt    text,
+    primechan   text,
+    funk_nazn   text,
+    rasp_piket  text,
+    naim_tr     text
+);
+
+INSERT INTO tmp_point_source
+(id, naim, teh_hrkt, primechan, funk_nazn, rasp_piket, naim_tr)
+SELECT
+    n.id,
+    n.naim,
+    n.teh_hrkt,
+    n.primechan,
+    n.funk_nazn,
+    n.rasp_piket,
+    n.naim_tr
+FROM dblink(
+    'dbname=normalize',
+    'select id, naim, teh_hrkt, primechan, funk_nazn, rasp_piket, naim_tr
+     from ready."OT_Truboprovod_P_klass_prav"'
+) AS n(
+    id uuid,
+    naim text,
+    teh_hrkt text,
+    primechan text,
+    funk_nazn text,
+    rasp_piket text,
+    naim_tr text
+);
+
+
+-- ============================================================
+-- 2. РАЗВОРАЧИВАЕМ ПИКЕТЫ И НАИМЕНОВАНИЯ ТРУБОПРОВОДОВ
+-- ============================================================
+
+DROP TABLE IF EXISTS tmp_point_pikets;
+CREATE TEMP TABLE tmp_point_pikets AS
+SELECT
+    s.id,
+    trim(x.value) AS rasp_piket
+FROM tmp_point_source s
+CROSS JOIN LATERAL unnest(string_to_array(s.rasp_piket, ';')) AS x(value)
+WHERE s.rasp_piket IS NOT NULL
+  AND nullif(trim(x.value), '') IS NOT NULL;
+
+DROP TABLE IF EXISTS tmp_point_pipeline_names;
+CREATE TEMP TABLE tmp_point_pipeline_names AS
+SELECT
+    s.id,
+    trim(x.value) AS pipeline_name
+FROM tmp_point_source s
+CROSS JOIN LATERAL unnest(string_to_array(s.naim_tr, ';')) AS x(value)
+WHERE s.naim_tr IS NOT NULL
+  AND nullif(trim(x.value), '') IS NOT NULL;
+
+
+-- ============================================================
+-- 3. РУЧНЫЕ СВЯЗИ ИЗ СТАРОГО СКРИПТА
+-- Они НЕ вставляются безусловно.
+-- Применяются только к id, присутствующим в текущей выборке.
+-- ============================================================
+
+DROP TABLE IF EXISTS tmp_manual_pipeline_links;
+CREATE TEMP TABLE tmp_manual_pipeline_links (
+    point_id    uuid NOT NULL,
+    pipeline_id uuid NOT NULL
+);
+
+INSERT INTO tmp_manual_pipeline_links(point_id, pipeline_id)
+VALUES
+('561eb2b2-7224-4529-897a-f677ece3b0d2', 'b6df793f-fb31-4efa-9765-085d3eb7e3ee'),
+('01dff258-9a13-4d8f-9167-8a73a7be73cd', '9ef92c82-2691-4bf6-b4e8-1aa34a5ce82a'),
+('269e141d-30ee-4f4a-98ad-a11fde453afd', 'bbdb4cfc-5f83-43ef-b95b-d244f7c3e080'),
+('a5ebbf56-9604-4947-b898-a7599d69741b', 'b6df793f-fb31-4efa-9765-085d3eb7e3ee'),
+('9b8ab0ee-4c65-4da7-b204-bf6c860468e9', 'ef58d9df-62ce-4f9f-8cd4-9a95ea14094d'),
+('6e06cc99-a2ed-4642-b16b-8eaad71465fc', 'ea92cb8d-c059-4871-87d0-bce81e9e150b'),
+('783ffea1-0173-4266-91ab-8c6c0176b6e5', 'b18610fd-54aa-4051-8ea4-612c6e190f06'),
+('c83a9802-a70e-4643-bc06-5cef97c70a06', 'b18610fd-54aa-4051-8ea4-612c6e190f06');
+
+
+-- ============================================================
+-- 4. ТАБЛИЦА ДИАГНОСТИКИ
+-- ============================================================
+
+DROP TABLE IF EXISTS tmp_stage2_issues;
+CREATE TEMP TABLE tmp_stage2_issues (
+    severity     text NOT NULL,
+    issue_type   text NOT NULL,
+    source_id    uuid,
+    field_name   text,
+    source_value text,
+    details      text
+);
+
+
+-- ------------------------------------------------------------
+-- 4.1 ID
+-- ------------------------------------------------------------
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'ERROR',
+    'NULL_ID',
+    NULL,
+    'id',
+    NULL,
+    'В источнике есть строка без id'
+FROM tmp_point_source
+WHERE id IS NULL;
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'ERROR',
+    'DUPLICATE_SOURCE_ID',
+    id,
+    'id',
+    id::text,
+    'Один id встречается в нормализованном источнике ' || count(*) || ' раз(а)'
+FROM tmp_point_source
+WHERE id IS NOT NULL
+GROUP BY id
+HAVING count(*) > 1;
+
+
+-- ------------------------------------------------------------
+-- 4.2 Уже существующие CompositionOfLinearObject
+-- Старый код использует ON CONFLICT DO NOTHING, поэтому
+-- отличающиеся данные НЕ обновятся. Показываем это заранее.
+-- ------------------------------------------------------------
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'WARNING',
+    'EXISTING_COMPOSITION_DIFFERENT',
+    s.id,
+    'CompositionOfLinearObject',
+    s.naim,
+    'id уже существует; ON CONFLICT DO NOTHING не обновит naim/teh_hrkt/primechan'
+FROM tmp_point_source s
+JOIN public."CompositionOfLinearObject" t ON t.id = s.id
+WHERE t.naim IS DISTINCT FROM s.naim
+   OR t.teh_hrkt IS DISTINCT FROM s.teh_hrkt
+   OR t.primechan IS DISTINCT FROM s.primechan;
+
+
+-- ------------------------------------------------------------
+-- 4.3 Функциональное назначение -> PurposesOfPipelineNetworkObjects
+-- ------------------------------------------------------------
+
+WITH matches AS (
+    SELECT
+        s.id,
+        s.funk_nazn,
+        count(pdo.id) AS match_count
+    FROM tmp_point_source s
+    LEFT JOIN public."PurposesOfPipelineNetworkObjects" pdo
+        ON s.funk_nazn = pdo.naim
+    WHERE s.funk_nazn IS NOT NULL
+    GROUP BY s.id, s.funk_nazn
+)
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    CASE WHEN match_count = 0 THEN 'ERROR' ELSE 'ERROR' END,
+    CASE WHEN match_count = 0
+         THEN 'PURPOSE_NOT_FOUND'
+         ELSE 'PURPOSE_AMBIGUOUS'
+    END,
+    id,
+    'funk_nazn',
+    funk_nazn,
+    CASE WHEN match_count = 0
+         THEN 'Значение не найдено в PurposesOfPipelineNetworkObjects.naim'
+         ELSE 'В PurposesOfPipelineNetworkObjects найдено несколько совпадений: ' || match_count
+    END
+FROM matches
+WHERE match_count <> 1;
+
+
+-- ------------------------------------------------------------
+-- 4.4 Пикеты
+-- ------------------------------------------------------------
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'WARNING',
+    'EMPTY_PIKET_AFTER_SPLIT',
+    s.id,
+    'rasp_piket',
+    s.rasp_piket,
+    'rasp_piket заполнен, но после разделения по ; не осталось непустых значений'
+FROM tmp_point_source s
+WHERE s.rasp_piket IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM tmp_point_pikets p
+      WHERE p.id = s.id
+  );
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'WARNING',
+    'DUPLICATE_PIKET_IN_SOURCE',
+    id,
+    'rasp_piket',
+    rasp_piket,
+    'Один и тот же пикет повторяется у объекта после разделения'
+FROM tmp_point_pikets
+GROUP BY id, rasp_piket
+HAVING count(*) > 1;
+
+
+-- ------------------------------------------------------------
+-- 4.5 Связь naim_tr -> Pipelines
+--
+-- КРИТИЧНО:
+-- исходный DISTINCT ON без ORDER BY мог случайно выбрать один
+-- Pipeline, если одинаковый naim_tr был у нескольких записей.
+-- Теперь такие случаи считаются ошибкой и показываются.
+-- ------------------------------------------------------------
+
+WITH matches AS (
+    SELECT
+        s.id,
+        s.pipeline_name,
+        count(p.id) AS match_count
+    FROM tmp_point_pipeline_names s
+    LEFT JOIN public."Pipelines" p
+        ON trim(p.naim_tr) = s.pipeline_name
+    GROUP BY s.id, s.pipeline_name
+)
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'ERROR',
+    CASE WHEN match_count = 0
+         THEN 'PIPELINE_NOT_FOUND'
+         ELSE 'PIPELINE_AMBIGUOUS'
+    END,
+    id,
+    'naim_tr',
+    pipeline_name,
+    CASE WHEN match_count = 0
+         THEN 'Не найден трубопровод в Pipelines по точному trim(naim_tr)'
+         ELSE 'В Pipelines найдено несколько трубопроводов с таким naim_tr: ' || match_count
+    END
+FROM matches
+WHERE match_count <> 1;
+
+
+-- ------------------------------------------------------------
+-- 4.6 Ручные связи: проверяем только те, которые относятся
+-- к текущей нормализованной выборке.
+-- ------------------------------------------------------------
+
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'ERROR',
+    'MANUAL_PIPELINE_NOT_FOUND',
+    m.point_id,
+    'naim_tr',
+    m.pipeline_id::text,
+    'Ручная связь относится к текущему объекту, но pipeline_id отсутствует в Pipelines'
+FROM tmp_manual_pipeline_links m
+JOIN tmp_point_source s ON s.id = m.point_id
+LEFT JOIN public."Pipelines" p ON p.id = m.pipeline_id
+WHERE p.id IS NULL;
+
+
+-- ------------------------------------------------------------
+-- 4.7 Проверяем, какие текущие точки вообще не смогут получить
+-- связь с трубопроводом ни автоматически, ни по ручному исключению,
+-- ни из уже существующей целевой связи.
+-- ------------------------------------------------------------
+
+WITH automatic_links AS (
+    SELECT DISTINCT
+        s.id,
+        p.id AS pipeline_id
+    FROM tmp_point_pipeline_names s
+    JOIN public."Pipelines" p
+        ON trim(p.naim_tr) = s.pipeline_name
+    WHERE (
+        SELECT count(*)
+        FROM public."Pipelines" p2
+        WHERE trim(p2.naim_tr) = s.pipeline_name
+    ) = 1
+),
+manual_links AS (
+    SELECT
+        m.point_id AS id,
+        m.pipeline_id
+    FROM tmp_manual_pipeline_links m
+    JOIN tmp_point_source s ON s.id = m.point_id
+    JOIN public."Pipelines" p ON p.id = m.pipeline_id
+),
+existing_links AS (
+    SELECT
+        c.id,
+        c.naim_tr AS pipeline_id
+    FROM public."CompositionOfLinearObjectPipelines" c
+    JOIN tmp_point_source s ON s.id = c.id
+),
+all_links AS (
+    SELECT * FROM automatic_links
+    UNION
+    SELECT * FROM manual_links
+    UNION
+    SELECT * FROM existing_links
+)
+INSERT INTO tmp_stage2_issues
+(severity, issue_type, source_id, field_name, source_value, details)
+SELECT
+    'WARNING',
+    'NO_PIPELINE_RELATION',
+    s.id,
+    'naim_tr',
+    s.naim_tr,
+    'Для текущего объекта не найдено ни одной связи с Pipelines'
+FROM tmp_point_source s
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM all_links l
+    WHERE l.id = s.id
+);
+
+
+-- ============================================================
+-- 5. РЕЗУЛЬТАТЫ ПРЕДВАРИТЕЛЬНОЙ ПРОВЕРКИ
+-- ============================================================
+
+-- 5.1 Итог по типам проблем
+SELECT
+    severity,
+    issue_type,
+    count(*) AS problem_count
+FROM tmp_stage2_issues
+GROUP BY severity, issue_type
+ORDER BY
+    CASE severity WHEN 'ERROR' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END,
+    issue_type;
+
+-- 5.2 Все проблемные строки
+SELECT
+    severity,
+    issue_type,
+    source_id,
+    field_name,
+    source_value,
+    details
+FROM tmp_stage2_issues
+ORDER BY
+    CASE severity WHEN 'ERROR' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END,
+    issue_type,
+    source_id;
+
+-- 5.3 Уникальные функциональные назначения, которые не сопоставились
+SELECT
+    source_value AS funk_nazn,
+    count(*) AS object_count,
+    max(details) AS details
+FROM tmp_stage2_issues
+WHERE issue_type IN ('PURPOSE_NOT_FOUND', 'PURPOSE_AMBIGUOUS')
+GROUP BY source_value
+ORDER BY object_count DESC, source_value;
+
+-- 5.4 Уникальные наименования трубопроводов, которые не сопоставились
+SELECT
+    source_value AS naim_tr,
+    count(*) AS object_count,
+    max(details) AS details
+FROM tmp_stage2_issues
+WHERE issue_type IN ('PIPELINE_NOT_FOUND', 'PIPELINE_AMBIGUOUS')
+GROUP BY source_value
+ORDER BY object_count DESC, source_value;
+
+-- 5.5 Только текущие точки, для которых не получается определить связь с Pipeline
+SELECT
+    source_id AS id,
+    source_value AS naim_tr,
+    details
+FROM tmp_stage2_issues
+WHERE issue_type = 'NO_PIPELINE_RELATION'
+ORDER BY source_id;
+
+
+-- ============================================================
+-- 6. ЗАГРУЗКА
+-- Выполняется ТОЛЬКО если do_load = true.
+-- При наличии ERROR загрузка блокируется.
+-- WARNING загрузку не блокируют: их решение остаётся за пользователем.
+-- ============================================================
+
+DO $$
+DECLARE
+    v_do_load boolean;
+    v_error_count integer;
+BEGIN
+    SELECT do_load INTO v_do_load
+    FROM tmp_stage2_config
+    LIMIT 1;
+
+    IF NOT v_do_load THEN
+        RAISE NOTICE 'Режим проверки: целевые таблицы не изменялись. Для загрузки установите do_load = true и запустите весь скрипт заново.';
+        RETURN;
+    END IF;
+
+    SELECT count(*) INTO v_error_count
+    FROM tmp_stage2_issues
+    WHERE severity = 'ERROR';
+
+    IF v_error_count > 0 THEN
+        RAISE EXCEPTION 'Загрузка остановлена: обнаружено ошибок уровня ERROR: %. Сначала исправьте или разберите их.', v_error_count;
+    END IF;
+
+    -- 6.1 Основной объект
+    INSERT INTO public."CompositionOfLinearObject"
+    (id, naim, teh_hrkt, primechan)
+    SELECT
+        s.id,
+        s.naim,
+        s.teh_hrkt,
+        s.primechan
+    FROM tmp_point_source s
+    ON CONFLICT (id) DO NOTHING;
+
+    -- 6.2 Функциональное назначение -> UUID справочника
+    UPDATE public."CompositionOfLinearObject" ld
+    SET funk_nazn = pdo.id
+    FROM tmp_point_source s
+    JOIN public."PurposesOfPipelineNetworkObjects" pdo
+        ON s.funk_nazn = pdo.naim
+    WHERE ld.id = s.id
+      AND s.funk_nazn IS NOT NULL;
+
+    -- 6.3 Пикеты
+    -- В отличие от старого WHERE NOT EXISTS только по id,
+    -- проверяем конкретную пару id + rasp_piket:
+    -- это не мешает добавить новый пикет уже существующему объекту.
+    INSERT INTO public."CompositionOfLinerObjectPikets"
+    (id, rasp_piket, "CreatedAt", "UpdatedAt", "IsBlocked")
+    SELECT DISTINCT
+        p.id,
+        p.rasp_piket,
+        now(),
+        now(),
+        false
+    FROM tmp_point_pikets p
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public."CompositionOfLinerObjectPikets" ex
+        WHERE ex.id = p.id
+          AND ex.rasp_piket = p.rasp_piket
+    );
+
+    -- 6.4 Автоматические связи с Pipelines
+    INSERT INTO public."CompositionOfLinearObjectPipelines"
+    (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+    SELECT DISTINCT
+        s.id,
+        p.id,
+        now(),
+        now(),
+        false
+    FROM tmp_point_pipeline_names s
+    JOIN public."Pipelines" p
+        ON trim(p.naim_tr) = s.pipeline_name
+    ON CONFLICT (id, naim_tr) DO NOTHING;
+
+    -- 6.5 Ручные связи.
+    -- Только для объектов, которые действительно присутствуют
+    -- в текущем запуске этапа 2.
+    INSERT INTO public."CompositionOfLinearObjectPipelines"
+    (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+    SELECT DISTINCT
+        m.point_id,
+        m.pipeline_id,
+        now(),
+        now(),
+        false
+    FROM tmp_manual_pipeline_links m
+    JOIN tmp_point_source s ON s.id = m.point_id
+    JOIN public."Pipelines" p ON p.id = m.pipeline_id
+    ON CONFLICT (id, naim_tr) DO NOTHING;
+
+    RAISE NOTICE 'Этап 2 выполнен.';
+END $$;
+
+
+-- ============================================================
+-- 7. КОНТРОЛЬ ПОСЛЕ ВКЛЮЧЁННОЙ ЗАГРУЗКИ
+-- Эти SELECT безопасны и в режиме проверки.
+-- ============================================================
+
+-- Текущие исходные точки, которых нет в CompositionOfLinearObject
+SELECT
+    s.id
+FROM tmp_point_source s
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM public."CompositionOfLinearObject" c
+    WHERE c.id = s.id
+)
+ORDER BY s.id;
+
+-- Текущие исходные точки, у которых после загрузки нет связи с Pipelines
+-- (не вся историческая CompositionOfLinearObject, а только текущая сессия)
+SELECT
+    s.id,
+    s.naim,
+    s.naim_tr
+FROM tmp_point_source s
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM public."CompositionOfLinearObjectPipelines" c
+    WHERE c.id = s.id
+)
+ORDER BY s.id;
