@@ -1,0 +1,30 @@
+select
+    source_value as funk_nazn,
+    count(*) as objects_count,
+    max(details) as problem
+from tmp_stage2_issues
+where issue_type in (
+    'PURPOSE_NOT_FOUND',
+    'PURPOSE_AMBIGUOUS'
+)
+group by source_value
+order by objects_count desc, funk_nazn;
+
+...
+select
+    source_value as naim_tr,
+    count(*) as objects_count,
+    max(details) as problem
+from tmp_stage2_issues
+where issue_type in (
+    'PIPELINE_NOT_FOUND',
+    'PIPELINE_AMBIGUOUS'
+)
+group by source_value
+order by objects_count desc, naim_tr;
+
+select
+    count(*) as all_objects,
+    count(*) filter (where funk_nazn is null) as funk_nazn_null,
+    count(*) filter (where funk_nazn is not null) as funk_nazn_filled
+from tmp_point_source;
