@@ -1,0 +1,42 @@
+SELECT
+    (SELECT count(*) FROM tmp_point_source)
+        AS source_objects,
+
+    (SELECT count(*) FROM tmp_resolved_purposes)
+        AS purposes_resolved,
+
+    (SELECT count(*) FROM tmp_source_pikets)
+        AS source_pikets,
+
+    (SELECT count(*) FROM tmp_new_pikets)
+        AS new_pikets,
+
+    (SELECT count(*) FROM tmp_resolved_pipeline_links)
+        AS pipeline_links_resolved,
+
+    (SELECT count(*) FROM tmp_new_pipeline_links)
+        AS new_pipeline_links,
+
+    (
+        SELECT count(*)
+        FROM tmp_stage2_issues
+        WHERE severity = 'ERROR'
+    )
+        AS errors,
+
+    (
+        SELECT count(*)
+        FROM tmp_stage2_issues
+        WHERE severity = 'WARNING'
+    )
+        AS warnings;
+
+
+/* ============================================================
+   35. ЗАКРЫВАЕМ СОЕДИНЕНИЕ С neo_nsi
+
+   Все tmp_* таблицы при этом остаются доступны
+   в локальной сессии DBeaver.
+   ============================================================ */
+
+SELECT dblink_disconnect('neo_nsi_conn');
