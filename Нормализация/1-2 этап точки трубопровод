@@ -1,0 +1,2202 @@
+ТОЧКИ:
+norm.point_*
+tmp_point_*
+
+ЛИНИИ — позже:
+norm.line_*
+tmp_line_*
+
+ПЛОЩАДНЫЕ — позже:
+norm.polygon_*
+tmp_polygon_*
+
+
+текущий первый скрипт
+        ↓
+OT_Truboprovod_P_klass_prav
+        ↓
+этот новый блок
+        │
+        ├─ применяет накопленные решения
+        ├─ подключается к neo_nsi
+        ├─ сравнивает funk_nazn со справочником
+        ├─ сравнивает naim_tr с Pipelines
+        ├─ точные совпадения исправляет автоматически
+        ├─ при точных дублях выбирает один UUID
+        │  и только предупреждает
+        └─ для ненайденных строит TOP-5 похожих вариантов
+                ↓
+             твое решение
+                ↓
+      решение сохраняется навсегда
+                ↓
+       следующий запуск уже знает его
+
+
+
+
+       /* ============================================================
+   НОРМАЛИЗАЦИЯ ТРУБОПРОВОДОВ
+   ТОЧЕЧНЫЕ ОБЪЕКТЫ — POINT
+
+   БЛОК 1Б.
+   Сверка нормализованных данных со справочниками neo_nsi.
+
+   ЗАПУСКАТЬ:
+       ПОСЛЕ текущего скрипта нормализации
+       ДО этапа 2 загрузки в neo_nsi.
+
+   Рабочая таблица:
+       public."OT_Truboprovod_P_klass_prav"
+
+   ВАЖНО:
+   - norm.point_* — постоянные локальные таблицы.
+     Они хранят накопленные решения между запусками.
+
+   - tmp_point_* — временные таблицы.
+     Они исчезнут после закрытия текущей сессии.
+
+   - В neo_nsi этот скрипт НИЧЕГО НЕ ЗАПИСЫВАЕТ.
+
+   - При одинаковых naim_tr в Pipelines один UUID выбирается
+     автоматически, как фактически происходило раньше.
+     Но теперь выбор детерминированный: минимальный UUID.
+
+   - Нечёткое (fuzzy) соответствие пока только предлагает
+     кандидатов и ничего автоматически не меняет.
+   ============================================================ */
+
+
+/* ============================================================
+   0. СЛУЖЕБНЫЕ РАСШИРЕНИЯ
+
+   dblink  — подключение к neo_nsi.
+   pg_trgm — поиск похожих строк.
+   ============================================================ */
+
+CREATE EXTENSION IF NOT EXISTS dblink;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+
+/* ============================================================
+   1. ОТДЕЛЬНАЯ СХЕМА ДЛЯ НАКОПЛЕННЫХ ПРАВИЛ
+
+   norm.point_*     — точки
+   norm.line_*      — будут линии
+   norm.polygon_*   — будут площадные объекты
+   ============================================================ */
+
+CREATE SCHEMA IF NOT EXISTS norm;
+
+
+/* ============================================================
+   2. ФУНКЦИЯ ПОДГОТОВКИ ТЕКСТА ДЛЯ СРАВНЕНИЯ
+
+   Она НЕ изменяет исходное поле.
+
+   Используется только для поиска соответствий:
+
+       лишние пробелы → один пробел
+       Enter/TAB      → пробел
+       регистр        → нижний
+       ё              → е
+
+   Пунктуацию и цифры не удаляем.
+   ============================================================ */
+
+CREATE OR REPLACE FUNCTION norm.text_key(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT
+        CASE
+            WHEN p_text IS NULL THEN NULL
+            ELSE replace(
+                lower(
+                    btrim(
+                        regexp_replace(
+                            replace(
+                                regexp_replace(
+                                    p_text,
+                                    E'[\r\n\t]+',
+                                    ' ',
+                                    'g'
+                                ),
+                                chr(160),
+                                ' '
+                            ),
+                            '[[:space:]]+',
+                            ' ',
+                            'g'
+                        )
+                    )
+                ),
+                'ё',
+                'е'
+            )
+        END;
+$$;
+
+
+/* ============================================================
+   3. ПОСТОЯННАЯ ТАБЛИЦА ОБЫЧНЫХ ИЗВЕСТНЫХ ИСПРАВЛЕНИЙ
+
+   СЮДА ПОЗЖЕ БУДЕМ ПЕРЕНОСИТЬ СТАРЫЕ UPDATE.
+
+   Например:
+
+       кран К1 → Кран К1
+
+   dzo = '*'
+       правило действует для всех ДЗО.
+
+   dzo = 'YGEO'
+       только для YGEO.
+
+   ВАЖНО:
+   naim_tr и funk_nazn сюда НЕ помещаем.
+   Для них ниже будут отдельные таблицы,
+   поскольку они связаны с UUID справочников.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_value_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL DEFAULT '*',
+
+    field_name varchar(50) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    normalized_value text,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_value_map_field_chk
+        CHECK (
+            field_name IN
+            (
+                'naim',
+                'class_name',
+                'teh_hrkt',
+                'rasp_piket',
+                'primechan'
+            )
+        ),
+
+    CONSTRAINT point_value_map_unique
+        UNIQUE (dzo, field_name, source_key)
+);
+
+
+/* ============================================================
+   4. РЕШЕНИЯ ПО funk_nazn
+
+   Здесь хранится уже ПРИНЯТОЕ решение:
+
+   исходный текст
+       ↓
+   UUID PurposesOfPipelineNetworkObjects
+
+   Решение сохраняется между поставками.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_purpose_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    purpose_id uuid NOT NULL,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_purpose_map_unique
+        UNIQUE (dzo, source_key)
+);
+
+
+/* ============================================================
+   5. РЕШЕНИЯ ПО naim_tr
+
+   Исходное название
+       ↓
+   конкретный Pipelines.id
+
+   Это особенно важно:
+   решение сохраняем по UUID, а не просто
+   "неправильное название → правильное название".
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_pipeline_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    pipeline_id uuid NOT NULL,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_pipeline_map_unique
+        UNIQUE (dzo, source_key)
+);
+
+
+/* ============================================================
+   6. ИСКЛЮЧЕНИЯ ДЛЯ КОНКРЕТНОЙ ТОЧКИ
+
+   Старый скрипт содержит много правил вида:
+
+       конкретный трубопровод
+       + конкретный пикет
+       + конкретный объект
+       → конкретная характеристика
+
+   Это НЕ общие ошибки.
+
+   Такие правила постепенно будем переносить сюда.
+
+   Поскольку id точек у нас сохраняются,
+   надёжнее привязывать исключение непосредственно к id.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_object_override
+(
+    object_id uuid NOT NULL,
+
+    field_name varchar(50) NOT NULL,
+
+    override_value text,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_object_override_pk
+        PRIMARY KEY (object_id, field_name),
+
+    CONSTRAINT point_object_override_field_chk
+        CHECK (
+            field_name IN
+            (
+                'naim',
+                'naim_tr',
+                'class_name',
+                'class_code',
+                'rasp_piket',
+                'funk_nazn',
+                'teh_hrkt',
+                'primechan'
+            )
+        )
+);
+
+
+/* ============================================================
+   7. КЛАССИФИКАТОР ТОЧЕЧНЫХ ОБЪЕКТОВ
+
+   Вместо отдельных UPDATE class_name → class_code
+   держим соответствия в одной таблице.
+
+   Эта таблица относится ТОЛЬКО к точкам.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_class_map
+(
+    class_name varchar(100) PRIMARY KEY,
+
+    class_code varchar(10) NOT NULL,
+
+    is_active boolean NOT NULL DEFAULT true
+);
+
+
+INSERT INTO norm.point_class_map
+(class_name, class_code)
+VALUES
+(
+    'Узел запорно регулирующей арматуры',
+    '1030203001'
+),
+(
+    'Узел запуска очистных устройств',
+    '1030203002'
+),
+(
+    'Узел приема очистных устройств',
+    '1030203003'
+),
+(
+    'Точка врезки',
+    '1030203004'
+),
+(
+    'Точки входа и выхода на поверхность',
+    '1030203005'
+),
+(
+    'Путевой подогреватель нефти',
+    '1030203006'
+),
+(
+    'Контрольный пункт линейной телемеханики',
+    '1030203007'
+)
+ON CONFLICT (class_name)
+DO UPDATE SET
+    class_code = EXCLUDED.class_code;
+
+
+/* ============================================================
+   8. ПАРАМЕТРЫ ТЕКУЩЕГО ЗАПУСКА
+
+   МЕНЯТЬ НУЖНО ТОЛЬКО СТРОКУ ПОДКЛЮЧЕНИЯ.
+
+   candidate_min_similarity:
+       ниже этого сходства кандидата даже не показываем.
+
+   high_similarity:
+       кандидат считается очень похожим.
+
+   high_similarity_gap:
+       лучший кандидат должен заметно опережать второй.
+
+   ПОКА эти параметры только создают подсказку.
+   Автоматическое fuzzy-исправление НЕ выполняется.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_norm_config;
+
+CREATE TEMP TABLE tmp_point_norm_config
+(
+    neo_conn text NOT NULL,
+
+    candidate_min_similarity double precision NOT NULL,
+
+    high_similarity double precision NOT NULL,
+
+    high_similarity_gap double precision NOT NULL
+);
+
+
+INSERT INTO tmp_point_norm_config
+VALUES
+(
+    'host=ХОСТ port=5432 dbname=neo_nsi user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ',
+
+    0.35,   -- минимальное сходство кандидата
+
+    0.97,   -- очень высокое сходство
+
+    0.05    -- насколько лучший вариант должен быть лучше второго
+);
+
+
+/* ============================================================
+   9. ПРОВЕРЯЕМ РАБОЧУЮ ТАБЛИЦУ
+
+   Она должна:
+   - существовать;
+   - содержать данные только одного ДЗО.
+   ============================================================ */
+
+DO $$
+DECLARE
+    v_dzo_count integer;
+    v_dzo text;
+BEGIN
+
+    IF to_regclass(
+        'public."OT_Truboprovod_P_klass_prav"'
+    ) IS NULL THEN
+
+        RAISE EXCEPTION
+            'Не найдена таблица OT_Truboprovod_P_klass_prav';
+
+    END IF;
+
+
+    SELECT
+        count(DISTINCT dzo),
+        min(dzo)
+
+    INTO
+        v_dzo_count,
+        v_dzo
+
+    FROM public."OT_Truboprovod_P_klass_prav"
+    WHERE dzo IS NOT NULL;
+
+
+    IF v_dzo_count = 0 THEN
+
+        RAISE EXCEPTION
+            'В OT_Truboprovod_P_klass_prav не заполнено dzo';
+
+    END IF;
+
+
+    IF v_dzo_count > 1 THEN
+
+        RAISE EXCEPTION
+            'В таблице находится больше одного ДЗО';
+
+    END IF;
+
+
+    RAISE NOTICE
+        'Нормализация POINT. Текущее ДЗО: %',
+        v_dzo;
+
+END $$;
+
+
+/* ============================================================
+   10. СОХРАНЯЕМ СОСТОЯНИЕ ДО НОВОЙ НОРМАЛИЗАЦИИ
+
+   Нужно только для контроля:
+   что именно изменил новый механизм.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_before_reference;
+
+CREATE TEMP TABLE tmp_point_before_reference AS
+SELECT
+    id,
+    dzo,
+    class_name,
+    class_code,
+    naim,
+    naim_tr,
+    rasp_piket,
+    funk_nazn,
+    teh_hrkt,
+    primechan
+FROM public."OT_Truboprovod_P_klass_prav";
+
+
+/* ============================================================
+   11. ПРИМЕНЯЕМ point_class_map
+
+   Если class_name известен,
+   class_code берём из одной таблицы соответствий.
+   ============================================================ */
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET
+    class_name = m.class_name,
+    class_code = m.class_code
+
+FROM norm.point_class_map m
+
+WHERE m.is_active
+  AND norm.text_key(s.class_name)
+      = norm.text_key(m.class_name);
+
+
+/* ============================================================
+   12. ПРИМЕНЯЕМ НАКОПЛЕННЫЕ ОБЩИЕ ИСПРАВЛЕНИЯ
+
+   Сначала ищется правило конкретного ДЗО.
+   Если его нет — глобальное правило dzo='*'.
+
+   Сейчас реализуем поля:
+       naim
+       class_name
+       teh_hrkt
+       rasp_piket
+       primechan
+   ============================================================ */
+
+
+/* ---------- NAIM ---------- */
+
+WITH matches AS
+(
+    SELECT
+        s.id,
+        m.normalized_value,
+
+        row_number() OVER
+        (
+            PARTITION BY s.id
+
+            ORDER BY
+                CASE
+                    WHEN m.dzo = s.dzo THEN 1
+                    ELSE 2
+                END,
+                m.map_id
+        ) AS rn
+
+    FROM public."OT_Truboprovod_P_klass_prav" s
+
+    JOIN norm.point_value_map m
+      ON m.field_name = 'naim'
+     AND m.is_active
+     AND m.dzo IN (s.dzo, '*')
+     AND m.source_key = norm.text_key(s.naim)
+)
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET naim = m.normalized_value
+
+FROM matches m
+
+WHERE s.id = m.id
+  AND m.rn = 1;
+
+
+/* ---------- CLASS_NAME ---------- */
+
+WITH matches AS
+(
+    SELECT
+        s.id,
+        m.normalized_value,
+
+        row_number() OVER
+        (
+            PARTITION BY s.id
+
+            ORDER BY
+                CASE
+                    WHEN m.dzo = s.dzo THEN 1
+                    ELSE 2
+                END,
+                m.map_id
+        ) AS rn
+
+    FROM public."OT_Truboprovod_P_klass_prav" s
+
+    JOIN norm.point_value_map m
+      ON m.field_name = 'class_name'
+     AND m.is_active
+     AND m.dzo IN (s.dzo, '*')
+     AND m.source_key = norm.text_key(s.class_name)
+)
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET class_name = m.normalized_value
+
+FROM matches m
+
+WHERE s.id = m.id
+  AND m.rn = 1;
+
+
+/* ---------- TEH_HRKT ---------- */
+
+WITH matches AS
+(
+    SELECT
+        s.id,
+        m.normalized_value,
+
+        row_number() OVER
+        (
+            PARTITION BY s.id
+
+            ORDER BY
+                CASE
+                    WHEN m.dzo = s.dzo THEN 1
+                    ELSE 2
+                END,
+                m.map_id
+        ) AS rn
+
+    FROM public."OT_Truboprovod_P_klass_prav" s
+
+    JOIN norm.point_value_map m
+      ON m.field_name = 'teh_hrkt'
+     AND m.is_active
+     AND m.dzo IN (s.dzo, '*')
+     AND m.source_key = norm.text_key(s.teh_hrkt)
+)
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET teh_hrkt = m.normalized_value
+
+FROM matches m
+
+WHERE s.id = m.id
+  AND m.rn = 1;
+
+
+/* ---------- RASP_PIKET ---------- */
+
+WITH matches AS
+(
+    SELECT
+        s.id,
+        m.normalized_value,
+
+        row_number() OVER
+        (
+            PARTITION BY s.id
+
+            ORDER BY
+                CASE
+                    WHEN m.dzo = s.dzo THEN 1
+                    ELSE 2
+                END,
+                m.map_id
+        ) AS rn
+
+    FROM public."OT_Truboprovod_P_klass_prav" s
+
+    JOIN norm.point_value_map m
+      ON m.field_name = 'rasp_piket'
+     AND m.is_active
+     AND m.dzo IN (s.dzo, '*')
+     AND m.source_key = norm.text_key(s.rasp_piket)
+)
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET rasp_piket = m.normalized_value
+
+FROM matches m
+
+WHERE s.id = m.id
+  AND m.rn = 1;
+
+
+/* ---------- PRIMECHAN ---------- */
+
+WITH matches AS
+(
+    SELECT
+        s.id,
+        m.normalized_value,
+
+        row_number() OVER
+        (
+            PARTITION BY s.id
+
+            ORDER BY
+                CASE
+                    WHEN m.dzo = s.dzo THEN 1
+                    ELSE 2
+                END,
+                m.map_id
+        ) AS rn
+
+    FROM public."OT_Truboprovod_P_klass_prav" s
+
+    JOIN norm.point_value_map m
+      ON m.field_name = 'primechan'
+     AND m.is_active
+     AND m.dzo IN (s.dzo, '*')
+     AND m.source_key = norm.text_key(s.primechan)
+)
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET primechan = m.normalized_value
+
+FROM matches m
+
+WHERE s.id = m.id
+  AND m.rn = 1;
+
+
+/* ============================================================
+   13. ПРИМЕНЯЕМ ИСКЛЮЧЕНИЯ КОНКРЕТНЫХ ТОЧЕК
+
+   По одному объекту может быть несколько исправляемых полей.
+   ============================================================ */
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET naim = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'naim'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET naim_tr = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'naim_tr'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET rasp_piket = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'rasp_piket'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET funk_nazn = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'funk_nazn'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET teh_hrkt = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'teh_hrkt'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET primechan = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'primechan'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET class_name = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'class_name'
+  AND o.is_active;
+
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+SET class_code = o.override_value
+FROM norm.point_object_override o
+WHERE o.object_id = s.id
+  AND o.field_name = 'class_code'
+  AND o.is_active;
+
+
+/* ============================================================
+   14. ПОДКЛЮЧЕНИЕ К neo_nsi
+   ============================================================ */
+
+DO $$
+BEGIN
+
+    IF 'neo_nsi_point_norm' =
+       ANY(
+           COALESCE(
+               dblink_get_connections(),
+               ARRAY[]::text[]
+           )
+       )
+    THEN
+
+        PERFORM dblink_disconnect(
+            'neo_nsi_point_norm'
+        );
+
+    END IF;
+
+END $$;
+
+
+SELECT dblink_connect
+(
+    'neo_nsi_point_norm',
+
+    (
+        SELECT neo_conn
+        FROM tmp_point_norm_config
+        LIMIT 1
+    )
+);
+
+
+/* ============================================================
+   15. КОПИРУЕМ СПРАВОЧНИК funk_nazn ЛОКАЛЬНО
+
+   neo_nsi:
+       PurposesOfPipelineNetworkObjects
+
+   Ничего в neo_nsi не меняем.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_nsi_purposes;
+
+CREATE TEMP TABLE tmp_point_nsi_purposes AS
+
+SELECT
+    x.id,
+    x.naim,
+    norm.text_key(x.naim) AS match_key
+
+FROM dblink
+(
+    'neo_nsi_point_norm',
+
+    '
+        SELECT
+            id,
+            naim::text
+        FROM public."PurposesOfPipelineNetworkObjects"
+    '
+)
+AS x
+(
+    id uuid,
+    naim text
+);
+
+
+CREATE INDEX
+    tmp_point_nsi_purposes_key_idx
+ON tmp_point_nsi_purposes(match_key);
+
+
+/* ============================================================
+   16. КОПИРУЕМ PIPELINES ЛОКАЛЬНО
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_nsi_pipelines;
+
+CREATE TEMP TABLE tmp_point_nsi_pipelines AS
+
+SELECT
+    x.id,
+    x.naim_tr,
+    norm.text_key(x.naim_tr) AS match_key
+
+FROM dblink
+(
+    'neo_nsi_point_norm',
+
+    '
+        SELECT
+            id,
+            naim_tr::text
+        FROM public."Pipelines"
+        WHERE naim_tr IS NOT NULL
+    '
+)
+AS x
+(
+    id uuid,
+    naim_tr text
+);
+
+
+CREATE INDEX
+    tmp_point_nsi_pipelines_key_idx
+ON tmp_point_nsi_pipelines(match_key);
+
+
+/* ============================================================
+   17. УНИКАЛЬНЫЕ funk_nazn ИЗ ТЕКУЩЕГО SHAPEFILE
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_values;
+
+CREATE TEMP TABLE tmp_point_purpose_values AS
+
+SELECT
+    dzo,
+
+    norm.text_key(funk_nazn) AS source_key,
+
+    min(funk_nazn) AS source_value,
+
+    count(*) AS objects_count
+
+FROM public."OT_Truboprovod_P_klass_prav"
+
+WHERE funk_nazn IS NOT NULL
+
+GROUP BY
+    dzo,
+    norm.text_key(funk_nazn);
+
+
+/* ============================================================
+   18. СОПОСТАВЛЯЕМ funk_nazn
+
+   ПРИОРИТЕТ:
+
+   1. Уже сохранённое решение пользователя.
+   2. Точное совпадение со справочником.
+   3. Если одинаковых записей несколько —
+      выбираем минимальный UUID.
+   4. Если ничего нет — UNRESOLVED.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_resolution;
+
+CREATE TEMP TABLE tmp_point_purpose_resolution AS
+
+WITH exact_matches AS
+(
+    SELECT
+        v.dzo,
+        v.source_key,
+
+        count(p.id) AS exact_count,
+
+        min(p.id::text)::uuid AS chosen_id
+
+    FROM tmp_point_purpose_values v
+
+    LEFT JOIN tmp_point_nsi_purposes p
+      ON p.match_key = v.source_key
+
+    GROUP BY
+        v.dzo,
+        v.source_key
+)
+
+SELECT
+    v.dzo,
+
+    v.source_value,
+
+    v.source_key,
+
+    v.objects_count,
+
+    e.exact_count,
+
+
+    CASE
+
+        /* Сохранённое решение существует
+           и UUID всё ещё существует в НСИ */
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NOT NULL
+        THEN saved.purpose_id
+
+
+        /* Сохранённый UUID исчез из НСИ.
+           Автоматически другой не выбираем. */
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NULL
+        THEN NULL
+
+
+        /* Сохранённого решения нет.
+           Используем точное совпадение. */
+
+        ELSE e.chosen_id
+
+    END AS target_id,
+
+
+    CASE
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NOT NULL
+            THEN 'SAVED'
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NULL
+            THEN 'SAVED_TARGET_MISSING'
+
+        WHEN e.exact_count = 1
+            THEN 'EXACT'
+
+        WHEN e.exact_count > 1
+            THEN 'EXACT_DUPLICATE'
+
+        ELSE 'UNRESOLVED'
+
+    END AS resolution_method
+
+
+FROM tmp_point_purpose_values v
+
+JOIN exact_matches e
+  ON e.dzo = v.dzo
+ AND e.source_key = v.source_key
+
+
+LEFT JOIN norm.point_purpose_map saved
+  ON saved.dzo = v.dzo
+ AND saved.source_key = v.source_key
+ AND saved.is_active
+
+
+LEFT JOIN tmp_point_nsi_purposes saved_target
+  ON saved_target.id = saved.purpose_id;
+
+
+/* ============================================================
+   19. funk_nazn:
+       ПРИМЕНЯЕМ ТОЛЬКО НАДЁЖНЫЕ РЕШЕНИЯ
+
+       SAVED
+       EXACT
+       EXACT_DUPLICATE
+
+   Fuzzy здесь пока ничего не меняет.
+   ============================================================ */
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET funk_nazn = p.naim
+
+FROM tmp_point_purpose_resolution r
+
+JOIN tmp_point_nsi_purposes p
+  ON p.id = r.target_id
+
+WHERE s.dzo = r.dzo
+
+  AND norm.text_key(s.funk_nazn)
+      = r.source_key
+
+  AND r.resolution_method IN
+  (
+      'SAVED',
+      'EXACT',
+      'EXACT_DUPLICATE'
+  );
+
+
+/* ============================================================
+   20. РАЗБИВАЕМ naim_tr ПО ;
+
+   Важно для точек, относящихся сразу
+   к нескольким трубопроводам.
+
+   WITH ORDINALITY сохраняет исходный порядок.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_parts;
+
+CREATE TEMP TABLE tmp_point_pipeline_parts AS
+
+SELECT
+    s.id,
+
+    s.dzo,
+
+    part_no::integer AS part_no,
+
+    btrim(part_value) AS source_value,
+
+    norm.text_key(
+        btrim(part_value)
+    ) AS source_key
+
+FROM public."OT_Truboprovod_P_klass_prav" s
+
+CROSS JOIN LATERAL
+
+    unnest(
+        string_to_array(
+            s.naim_tr,
+            ';'
+        )
+    )
+
+WITH ORDINALITY AS x
+(
+    part_value,
+    part_no
+)
+
+WHERE s.naim_tr IS NOT NULL
+
+  AND NULLIF(
+      btrim(part_value),
+      ''
+  ) IS NOT NULL;
+
+
+/* ============================================================
+   21. УНИКАЛЬНЫЕ ЗНАЧЕНИЯ naim_tr
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_values;
+
+CREATE TEMP TABLE tmp_point_pipeline_values AS
+
+SELECT
+    dzo,
+
+    source_key,
+
+    min(source_value) AS source_value,
+
+    count(DISTINCT id) AS objects_count
+
+FROM tmp_point_pipeline_parts
+
+GROUP BY
+    dzo,
+    source_key;
+
+
+/* ============================================================
+   22. СОПОСТАВЛЕНИЕ naim_tr → Pipelines
+
+   ПРИОРИТЕТ:
+
+   SAVED
+       пользователь уже принимал решение
+
+   EXACT
+       найден один Pipeline
+
+   EXACT_DUPLICATE
+       найдено несколько строк Pipelines
+       с тем же названием
+
+       → выбираем минимальный UUID
+       → загрузку не блокируем
+       → ниже показываем WARNING
+
+   UNRESOLVED
+       точного совпадения нет
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_resolution;
+
+CREATE TEMP TABLE tmp_point_pipeline_resolution AS
+
+WITH exact_matches AS
+(
+    SELECT
+        v.dzo,
+
+        v.source_key,
+
+        count(p.id) AS exact_count,
+
+        min(p.id::text)::uuid AS chosen_id
+
+    FROM tmp_point_pipeline_values v
+
+    LEFT JOIN tmp_point_nsi_pipelines p
+      ON p.match_key = v.source_key
+
+    GROUP BY
+        v.dzo,
+        v.source_key
+)
+
+SELECT
+    v.dzo,
+
+    v.source_value,
+
+    v.source_key,
+
+    v.objects_count,
+
+    e.exact_count,
+
+
+    CASE
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NOT NULL
+            THEN saved.pipeline_id
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NULL
+            THEN NULL
+
+        ELSE e.chosen_id
+
+    END AS target_id,
+
+
+    CASE
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NOT NULL
+            THEN 'SAVED'
+
+        WHEN saved.map_id IS NOT NULL
+         AND saved_target.id IS NULL
+            THEN 'SAVED_TARGET_MISSING'
+
+        WHEN e.exact_count = 1
+            THEN 'EXACT'
+
+        WHEN e.exact_count > 1
+            THEN 'EXACT_DUPLICATE'
+
+        ELSE 'UNRESOLVED'
+
+    END AS resolution_method
+
+
+FROM tmp_point_pipeline_values v
+
+JOIN exact_matches e
+  ON e.dzo = v.dzo
+ AND e.source_key = v.source_key
+
+
+LEFT JOIN norm.point_pipeline_map saved
+  ON saved.dzo = v.dzo
+ AND saved.source_key = v.source_key
+ AND saved.is_active
+
+
+LEFT JOIN tmp_point_nsi_pipelines saved_target
+  ON saved_target.id = saved.pipeline_id;
+
+
+/* ============================================================
+   23. ВОССТАНАВЛИВАЕМ naim_tr
+
+   Найденные значения заменяем на каноническое
+   название из Pipelines.
+
+   Ненайденное значение оставляем как есть.
+
+   Если было:
+
+       Трубопровод А; Трубопровод Б
+
+   порядок сохраняется.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_rebuild;
+
+CREATE TEMP TABLE tmp_point_pipeline_rebuild AS
+
+SELECT
+    part.id,
+
+    string_agg
+    (
+        COALESCE
+        (
+            pipeline.naim_tr,
+            part.source_value
+        ),
+
+        '; '
+
+        ORDER BY part.part_no
+    ) AS normalized_naim_tr
+
+
+FROM tmp_point_pipeline_parts part
+
+
+LEFT JOIN tmp_point_pipeline_resolution r
+  ON r.dzo = part.dzo
+ AND r.source_key = part.source_key
+
+
+LEFT JOIN tmp_point_nsi_pipelines pipeline
+  ON pipeline.id = r.target_id
+
+
+GROUP BY part.id;
+
+
+/* ============================================================
+   24. ПРИМЕНЯЕМ НОРМАЛИЗОВАННЫЙ naim_tr
+   ============================================================ */
+
+UPDATE public."OT_Truboprovod_P_klass_prav" s
+
+SET naim_tr = r.normalized_naim_tr
+
+FROM tmp_point_pipeline_rebuild r
+
+WHERE r.id = s.id;
+
+
+/* ============================================================
+   25. FUZZY-КАНДИДАТЫ ДЛЯ funk_nazn
+
+   Только для тех значений,
+   которые не удалось определить ранее.
+
+   Берём максимум 5 наиболее похожих вариантов.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_candidates_raw;
+
+CREATE TEMP TABLE tmp_point_purpose_candidates_raw AS
+
+SELECT
+    unresolved.dzo,
+
+    unresolved.source_value,
+
+    unresolved.source_key,
+
+    unresolved.objects_count,
+
+    candidate.id AS candidate_id,
+
+    candidate.naim AS candidate_value,
+
+    candidate.similarity_value
+
+FROM tmp_point_purpose_resolution unresolved
+
+JOIN LATERAL
+(
+    SELECT
+        p.id,
+
+        p.naim,
+
+        similarity
+        (
+            unresolved.source_key,
+            p.match_key
+        ) AS similarity_value
+
+    FROM tmp_point_nsi_purposes p
+
+    WHERE similarity
+    (
+        unresolved.source_key,
+        p.match_key
+    ) >=
+    (
+        SELECT candidate_min_similarity
+        FROM tmp_point_norm_config
+        LIMIT 1
+    )
+
+    ORDER BY
+        similarity_value DESC,
+        p.id::text
+
+    LIMIT 5
+
+) candidate ON true
+
+WHERE unresolved.resolution_method IN
+(
+    'UNRESOLVED',
+    'SAVED_TARGET_MISSING'
+);
+
+
+/* ============================================================
+   26. РАНЖИРУЕМ КАНДИДАТОВ funk_nazn
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_candidates;
+
+CREATE TEMP TABLE tmp_point_purpose_candidates AS
+
+WITH ranked AS
+(
+    SELECT
+        c.*,
+
+        row_number() OVER
+        (
+            PARTITION BY
+                dzo,
+                source_key
+
+            ORDER BY
+                similarity_value DESC,
+                candidate_id::text
+        ) AS candidate_rank
+
+    FROM tmp_point_purpose_candidates_raw c
+),
+
+candidate_stats AS
+(
+    SELECT
+        dzo,
+        source_key,
+
+        max(similarity_value)
+            FILTER (
+                WHERE candidate_rank = 1
+            ) AS best_similarity,
+
+        max(similarity_value)
+            FILTER (
+                WHERE candidate_rank = 2
+            ) AS second_similarity
+
+    FROM ranked
+
+    GROUP BY
+        dzo,
+        source_key
+)
+
+SELECT
+    r.dzo,
+
+    r.source_value,
+
+    r.objects_count,
+
+    r.candidate_rank,
+
+    r.candidate_id,
+
+    r.candidate_value,
+
+    round(
+        r.similarity_value::numeric,
+        4
+    ) AS similarity_value,
+
+
+    CASE
+
+        WHEN r.candidate_rank <> 1
+            THEN 'ALTERNATIVE'
+
+
+        WHEN s.best_similarity >=
+        (
+            SELECT high_similarity
+            FROM tmp_point_norm_config
+            LIMIT 1
+        )
+
+        AND
+        (
+            s.second_similarity IS NULL
+
+            OR
+
+            s.best_similarity
+            - s.second_similarity
+            >=
+            (
+                SELECT high_similarity_gap
+                FROM tmp_point_norm_config
+                LIMIT 1
+            )
+        )
+            THEN 'HIGH_CONFIDENCE'
+
+
+        ELSE 'NEED_REVIEW'
+
+    END AS decision_hint
+
+
+FROM ranked r
+
+JOIN candidate_stats s
+  ON s.dzo = r.dzo
+ AND s.source_key = r.source_key;
+
+
+/* ============================================================
+   27. FUZZY-КАНДИДАТЫ ДЛЯ PIPELINES
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_candidates_raw;
+
+CREATE TEMP TABLE tmp_point_pipeline_candidates_raw AS
+
+SELECT
+    unresolved.dzo,
+
+    unresolved.source_value,
+
+    unresolved.source_key,
+
+    unresolved.objects_count,
+
+    candidate.id AS candidate_id,
+
+    candidate.naim_tr AS candidate_value,
+
+    candidate.similarity_value
+
+FROM tmp_point_pipeline_resolution unresolved
+
+JOIN LATERAL
+(
+    SELECT
+        p.id,
+
+        p.naim_tr,
+
+        similarity
+        (
+            unresolved.source_key,
+            p.match_key
+        ) AS similarity_value
+
+    FROM tmp_point_nsi_pipelines p
+
+    WHERE similarity
+    (
+        unresolved.source_key,
+        p.match_key
+    ) >=
+    (
+        SELECT candidate_min_similarity
+        FROM tmp_point_norm_config
+        LIMIT 1
+    )
+
+    ORDER BY
+        similarity_value DESC,
+        p.id::text
+
+    LIMIT 5
+
+) candidate ON true
+
+WHERE unresolved.resolution_method IN
+(
+    'UNRESOLVED',
+    'SAVED_TARGET_MISSING'
+);
+
+
+/* ============================================================
+   28. РАНЖИРУЕМ PIPELINE-КАНДИДАТОВ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_candidates;
+
+CREATE TEMP TABLE tmp_point_pipeline_candidates AS
+
+WITH ranked AS
+(
+    SELECT
+        c.*,
+
+        row_number() OVER
+        (
+            PARTITION BY
+                dzo,
+                source_key
+
+            ORDER BY
+                similarity_value DESC,
+                candidate_id::text
+        ) AS candidate_rank
+
+    FROM tmp_point_pipeline_candidates_raw c
+),
+
+candidate_stats AS
+(
+    SELECT
+        dzo,
+        source_key,
+
+        max(similarity_value)
+            FILTER (
+                WHERE candidate_rank = 1
+            ) AS best_similarity,
+
+        max(similarity_value)
+            FILTER (
+                WHERE candidate_rank = 2
+            ) AS second_similarity
+
+    FROM ranked
+
+    GROUP BY
+        dzo,
+        source_key
+)
+
+SELECT
+    r.dzo,
+
+    r.source_value,
+
+    r.objects_count,
+
+    r.candidate_rank,
+
+    r.candidate_id,
+
+    r.candidate_value,
+
+    round(
+        r.similarity_value::numeric,
+        4
+    ) AS similarity_value,
+
+
+    CASE
+
+        WHEN r.candidate_rank <> 1
+            THEN 'ALTERNATIVE'
+
+
+        WHEN s.best_similarity >=
+        (
+            SELECT high_similarity
+            FROM tmp_point_norm_config
+            LIMIT 1
+        )
+
+        AND
+        (
+            s.second_similarity IS NULL
+
+            OR
+
+            s.best_similarity
+            - s.second_similarity
+            >=
+            (
+                SELECT high_similarity_gap
+                FROM tmp_point_norm_config
+                LIMIT 1
+            )
+        )
+            THEN 'HIGH_CONFIDENCE'
+
+
+        ELSE 'NEED_REVIEW'
+
+    END AS decision_hint
+
+
+FROM ranked r
+
+JOIN candidate_stats s
+  ON s.dzo = r.dzo
+ AND s.source_key = r.source_key;
+
+
+/* ============================================================
+   29. ОБЩАЯ ТАБЛИЦА ПРОБЛЕМ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_normalization_issues;
+
+CREATE TEMP TABLE tmp_point_normalization_issues
+(
+    severity text,
+
+    issue_type text,
+
+    dzo text,
+
+    source_value text,
+
+    objects_count integer,
+
+    details text
+);
+
+
+/* ---------- funk_nazn: старый UUID пропал ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'ERROR',
+
+    'PURPOSE_SAVED_TARGET_MISSING',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Сохранённый ранее purpose_id больше не найден в neo_nsi'
+
+FROM tmp_point_purpose_resolution
+
+WHERE resolution_method =
+      'SAVED_TARGET_MISSING';
+
+
+/* ---------- funk_nazn: точные дубли ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'WARNING',
+
+    'PURPOSE_EXACT_DUPLICATE',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Найдено точных совпадений: '
+        || exact_count
+        || '. Автоматически выбран минимальный UUID.'
+
+FROM tmp_point_purpose_resolution
+
+WHERE resolution_method =
+      'EXACT_DUPLICATE';
+
+
+/* ---------- funk_nazn не найден ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'REVIEW',
+
+    'PURPOSE_UNRESOLVED',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Не найдено точного соответствия. Посмотреть fuzzy-кандидатов.'
+
+FROM tmp_point_purpose_resolution
+
+WHERE resolution_method =
+      'UNRESOLVED';
+
+
+/* ---------- Pipeline: старый UUID пропал ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'ERROR',
+
+    'PIPELINE_SAVED_TARGET_MISSING',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Сохранённый ранее pipeline_id больше не найден в neo_nsi'
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method =
+      'SAVED_TARGET_MISSING';
+
+
+/* ---------- Pipeline: точные дубли ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'WARNING',
+
+    'PIPELINE_EXACT_DUPLICATE',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Найдено точных Pipelines: '
+        || exact_count
+        || '. Автоматически выбран минимальный UUID.'
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method =
+      'EXACT_DUPLICATE';
+
+
+/* ---------- Pipeline не найден ---------- */
+
+INSERT INTO tmp_point_normalization_issues
+
+SELECT
+    'REVIEW',
+
+    'PIPELINE_UNRESOLVED',
+
+    dzo,
+
+    source_value,
+
+    objects_count::integer,
+
+    'Точного соответствия нет. Посмотреть fuzzy-кандидатов.'
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method =
+      'UNRESOLVED';
+
+
+/* ============================================================
+   30. ИТОГ №1
+   СКОЛЬКО ЧЕГО НАШЛОСЬ
+   ============================================================ */
+
+SELECT
+
+    'funk_nazn' AS field_name,
+
+    resolution_method,
+
+    count(*) AS unique_values,
+
+    sum(objects_count) AS objects_count
+
+FROM tmp_point_purpose_resolution
+
+GROUP BY resolution_method
+
+
+UNION ALL
+
+
+SELECT
+
+    'naim_tr',
+
+    resolution_method,
+
+    count(*),
+
+    sum(objects_count)
+
+FROM tmp_point_pipeline_resolution
+
+GROUP BY resolution_method
+
+
+ORDER BY
+    field_name,
+    resolution_method;
+
+
+/* ============================================================
+   31. ИТОГ №2
+   ВСЕ ПРОБЛЕМЫ
+   ============================================================ */
+
+SELECT
+    severity,
+    issue_type,
+    dzo,
+    source_value,
+    objects_count,
+    details
+
+FROM tmp_point_normalization_issues
+
+ORDER BY
+    CASE severity
+        WHEN 'ERROR' THEN 1
+        WHEN 'REVIEW' THEN 2
+        WHEN 'WARNING' THEN 3
+        ELSE 4
+    END,
+
+    objects_count DESC,
+
+    source_value;
+
+
+/* ============================================================
+   32. ИТОГ №3
+   КАНДИДАТЫ funk_nazn
+
+   Сначала показываются лучшие варианты.
+   ============================================================ */
+
+SELECT
+    dzo,
+
+    source_value,
+
+    objects_count,
+
+    candidate_rank,
+
+    candidate_value,
+
+    candidate_id,
+
+    similarity_value,
+
+    decision_hint
+
+FROM tmp_point_purpose_candidates
+
+ORDER BY
+    source_value,
+    candidate_rank;
+
+
+/* ============================================================
+   33. ИТОГ №4
+   КАНДИДАТЫ PIPELINES
+   ============================================================ */
+
+SELECT
+    dzo,
+
+    source_value,
+
+    objects_count,
+
+    candidate_rank,
+
+    candidate_value,
+
+    candidate_id,
+
+    similarity_value,
+
+    decision_hint
+
+FROM tmp_point_pipeline_candidates
+
+ORDER BY
+    objects_count DESC,
+    source_value,
+    candidate_rank;
+
+
+/* ============================================================
+   34. ИТОГ №5
+   КАКИЕ ТОЧНЫЕ ДУБЛИ PIPELINES ВСТРЕТИЛИСЬ
+
+   Они НЕ блокируют нормализацию.
+
+   Показываем:
+       исходное название
+       сколько Pipelines найдено
+       какой UUID выбран
+   ============================================================ */
+
+SELECT
+    dzo,
+
+    source_value,
+
+    objects_count,
+
+    exact_count,
+
+    target_id AS selected_pipeline_id
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method =
+      'EXACT_DUPLICATE'
+
+ORDER BY
+    objects_count DESC,
+    source_value;
+
+
+/* ============================================================
+   35. ИТОГ №6
+   ЧТО ИЗМЕНИЛ НОВЫЙ МЕХАНИЗМ
+   ============================================================ */
+
+SELECT
+    old.id,
+
+    old.funk_nazn AS old_funk_nazn,
+
+    new.funk_nazn AS new_funk_nazn,
+
+    old.naim_tr AS old_naim_tr,
+
+    new.naim_tr AS new_naim_tr
+
+FROM tmp_point_before_reference old
+
+JOIN public."OT_Truboprovod_P_klass_prav" new
+  ON new.id = old.id
+
+WHERE old.funk_nazn
+          IS DISTINCT FROM
+      new.funk_nazn
+
+   OR old.naim_tr
+          IS DISTINCT FROM
+      new.naim_tr
+
+ORDER BY old.id;
+
+
+/* ============================================================
+   36. ЗАКРЫВАЕМ СОЕДИНЕНИЕ
+
+   Все tmp_point_* таблицы ОСТАЮТСЯ
+   доступными в текущей сессии DBeaver.
+   ============================================================ */
+
+SELECT dblink_disconnect(
+    'neo_nsi_point_norm'
+);
+
+
+
+INSERT INTO norm.point_purpose_map
+(
+    dzo,
+    source_value,
+    purpose_id,
+    note
+)
+VALUES
+(
+    'YGEO',
+
+    'Охранные краны перед УКПГ',
+
+    'UUID_КОТОРЫЙ_ТЫ_ВЫБЕРЕШЬ',
+
+    'Проверено вручную'
+)
+
+ON CONFLICT (dzo, source_key)
+
+DO UPDATE SET
+
+    purpose_id = EXCLUDED.purpose_id,
+
+    note = EXCLUDED.note,
+
+    is_active = true,
+
+    updated_at = now();
+
+
+А как переносить старые обычные исправления
+
+Например мы точно знаем, что при любых поставках:
+
+кран К1 → Кран К1
+
+Вместо UPDATE:
+
+INSERT INTO norm.point_value_map
+(
+    dzo,
+    field_name,
+    source_value,
+    normalized_value,
+    note
+)
+VALUES
+(
+    '*',
+    'naim',
+    'кран К1',
+    'Кран К1',
+    'Повторяющаяся ошибка исходных данных'
+);
+
+Если ошибка характерна только для YGEO:
+
+INSERT INTO norm.point_value_map
+(
+    dzo,
+    field_name,
+    source_value,
+    normalized_value,
+    note
+)
+VALUES
+(
+    'YGEO',
+    'naim',
+    'старое значение',
+    'правильное значение',
+    'Правило только для YGEO'
+);
+
+А если неправильное значение относится только к одной конкретной точке, его нельзя помещать в общий point_value_map. Тогда:
+
+INSERT INTO norm.point_object_override
+(
+    object_id,
+    field_name,
+    override_value,
+    note
+)
+VALUES
+(
+    'UUID_ТОЧКИ',
+    'teh_hrkt',
+    'Линейный, Ду100, Ру16,0',
+    'Индивидуальная характеристика объекта'
+)
+
+ON CONFLICT (object_id, field_name)
+
+DO UPDATE SET
+
+    override_value = EXCLUDED.override_value,
+
+    note = EXCLUDED.note,
+
+    is_active = true,
+
+    updated_at = now();
+
+
+
+    
