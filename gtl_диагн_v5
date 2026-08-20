@@ -1,0 +1,1117 @@
+# -*- coding: utf-8 -*-
+"""
+Диагностика v5 сопоставления исходного листа «Сегменты» с текущей таблицей GasPipeSegments.
+
+Что делает скрипт:
+- ТОЛЬКО читает данные из текущего проекта QGIS и исходный Excel/TSV;
+- НЕ изменяет PostgreSQL и слои QGIS;
+- сначала сопоставляет обычные физические строки как мультимножество;
+- учитывает, что в БД StartGtsPointId/EndGtsPointId могут быть развернуты относительно Excel,
+  при этом StartKilometer и Length остаются исходными;
+- строки с «Обратное» и «кольцо» рассматривает как производное представление того же
+  физического сегмента и разрешает им ссылаться на уже использованный GasPipeSegments;
+- формирует отдельный XLSX с диагностикой.
+
+Запуск:
+1. В QGIS должны быть загружены: GasPipeSegments, GtsPoints, GasPipelines,
+   TransGases, Regions.
+2. Модули -> Консоль Python -> Показать редактор.
+3. Открыть этот .py и нажать «Запустить сценарий».
+4. Выбрать ИСХОДНЫЙ файл с таблицей «Сегменты» (.xlsx/.xlsm или .txt/.tsv).
+5. Выбрать место сохранения диагностического XLSX.
+"""
+
+import csv
+import math
+import re
+from collections import Counter, defaultdict, deque
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from qgis.core import QgsProject
+from qgis.PyQt.QtCore import QDate, QDateTime, QUuid, QStandardPaths
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+
+try:
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    QMessageBox.critical(
+        None,
+        "Не найден openpyxl",
+        "В Python QGIS не установлена библиотека openpyxl."
+    )
+    raise
+
+
+REQUIRED_LAYERS = [
+    "GasPipeSegments",
+    "GtsPoints",
+    "GasPipelines",
+    "TransGases",
+    "Regions",
+]
+
+EXPECTED_SOURCE_COUNT = 5677
+_FIELD_MAP_CACHE = {}
+
+
+# ---------------------------------------------------------------------------
+# БАЗОВЫЕ ФУНКЦИИ QGIS
+# ---------------------------------------------------------------------------
+
+def clean_value(value):
+    if value is None:
+        return None
+    if isinstance(value, QDateTime):
+        return value.toPyDateTime()
+    if isinstance(value, QDate):
+        return value.toPyDate()
+    if isinstance(value, QUuid):
+        return value.toString().strip("{}")
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    text = str(value).strip()
+    if text.upper() in {"NULL", "NONE", "<NULL>"}:
+        return None
+    return value
+
+
+def uuid_key(value):
+    value = clean_value(value)
+    if value is None:
+        return None
+    return str(value).strip().strip("{}").lower()
+
+
+def get_layer(name):
+    project = QgsProject.instance()
+    exact = project.mapLayersByName(name)
+    if exact:
+        return exact[0]
+    wanted = name.casefold()
+    for layer in project.mapLayers().values():
+        if layer.name().casefold() == wanted:
+            return layer
+    return None
+
+
+def get_field_map(layer):
+    if layer is None:
+        return {}
+    lid = layer.id()
+    if lid not in _FIELD_MAP_CACHE:
+        _FIELD_MAP_CACHE[lid] = {
+            field.name().casefold(): field.name()
+            for field in layer.fields()
+        }
+    return _FIELD_MAP_CACHE[lid]
+
+
+def attr(layer, feature, *candidates, default=None):
+    if layer is None or feature is None:
+        return default
+    fmap = get_field_map(layer)
+    for candidate in candidates:
+        actual = fmap.get(candidate.casefold())
+        if actual is not None:
+            value = clean_value(feature[actual])
+            return default if value is None else value
+    return default
+
+
+def build_index(layer, *id_candidates):
+    result = {}
+    if layer is None:
+        return result
+    candidates = id_candidates or ("Id", "id")
+    for feature in layer.getFeatures():
+        value = attr(layer, feature, *candidates)
+        key = uuid_key(value)
+        if key:
+            result[key] = feature
+    return result
+
+
+def lookup_feature(index, value):
+    return index.get(uuid_key(value))
+
+
+def display_value(layer, index, foreign_id, *field_candidates):
+    feature = lookup_feature(index, foreign_id)
+    if feature is None:
+        return None
+    return attr(layer, feature, *field_candidates)
+
+
+# ---------------------------------------------------------------------------
+# НОРМАЛИЗАЦИЯ ДЛЯ СОПОСТАВЛЕНИЯ
+# ---------------------------------------------------------------------------
+
+def norm_text(value):
+    value = clean_value(value)
+    if value is None:
+        return ""
+    text = str(value).replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.casefold()
+
+
+def norm_point(value):
+    """
+    Нормализация имени точки только для сопоставления.
+
+    В текущей БД часть прежних точек хранится как "ТСГ <старое имя>".
+    Само значение в БД не меняется и при последующей выгрузке может
+    использоваться как есть; здесь префикс игнорируется только как
+    техническое различие идентификатора точки.
+    """
+    text = norm_text(value)
+    if text.startswith("тсг "):
+        text = text[4:].strip()
+    return text
+
+
+def norm_num(value):
+    value = clean_value(value)
+    if value is None or str(value).strip() == "":
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return norm_text(value)
+    if number == 0:
+        return "0"
+    return format(number.normalize(), "f")
+
+
+def display_clean(value):
+    value = clean_value(value)
+    if value is None:
+        return None
+    return value
+
+
+STRUCTURAL_FIELDS = ["pipeline", "start_km", "start_point", "length", "end_point"]
+EXTENDED_FIELDS = ["power", "pressure", "diameter", "state", "transgas", "remark", "region"]
+ALL_ORDINARY_FIELDS = STRUCTURAL_FIELDS + EXTENDED_FIELDS
+
+
+def record_key(record, fields):
+    result = []
+    for field in fields:
+        if field in {"start_km", "length", "power", "pressure", "diameter"}:
+            result.append(norm_num(record.get(field)))
+        elif field in {"start_point", "end_point"}:
+            result.append(norm_point(record.get(field)))
+        else:
+            result.append(norm_text(record.get(field)))
+    return tuple(result)
+
+
+def structural_key(record):
+    return record_key(record, STRUCTURAL_FIELDS)
+
+
+def full_key(record):
+    return record_key(record, ALL_ORDINARY_FIELDS)
+
+
+def point_pair(record):
+    a = norm_point(record.get("start_point"))
+    b = norm_point(record.get("end_point"))
+    return tuple(sorted((a, b)))
+
+
+def structural_key_unordered(record):
+    return (
+        norm_text(record.get("pipeline")),
+        norm_num(record.get("start_km")),
+        point_pair(record),
+        norm_num(record.get("length")),
+    )
+
+
+def full_key_unordered(record):
+    return structural_key_unordered(record) + tuple(
+        norm_num(record.get(field)) if field in {"power", "pressure", "diameter"}
+        else norm_text(record.get(field))
+        for field in EXTENDED_FIELDS
+    )
+
+
+def derived_key(record):
+    # Для «Обратное»/«кольцо» StartKilometer может соответствовать другому концу
+    # того же физического участка, поэтому его намеренно НЕ включаем.
+    return (
+        norm_text(record.get("pipeline")),
+        point_pair(record),
+        norm_num(record.get("length")),
+    )
+
+
+def is_derived_source(record):
+    return norm_text(record.get("attr_field")) in {"обратное", "кольцо"}
+
+
+def mismatch_fields(source, db):
+    mismatches = []
+    for field in EXTENDED_FIELDS:
+        if field in {"power", "pressure", "diameter"}:
+            left = norm_num(source.get(field))
+            right = norm_num(db.get(field))
+        else:
+            left = norm_text(source.get(field))
+            right = norm_text(db.get(field))
+        if left != right:
+            mismatches.append(field)
+    return mismatches
+
+
+# ---------------------------------------------------------------------------
+# ЧТЕНИЕ ИСХОДНИКА
+# ---------------------------------------------------------------------------
+
+def normalize_header(value):
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value).replace("\xa0", " ")).strip().casefold()
+
+
+def detect_header(row):
+    headers = [normalize_header(v) for v in row]
+    return (
+        "атрибутивное поле" in headers
+        and "наименование" in headers
+        and "начало участка, км" in headers
+        and "точка начала" in headers
+        and "длина, км" in headers
+        and "точка конца" in headers
+    )
+
+
+def make_header_map(row):
+    result = {}
+    for idx, value in enumerate(row):
+        h = normalize_header(value)
+        if h == "атрибутивное поле":
+            result["attr_field"] = idx
+        elif h == "наименование":
+            result["pipeline"] = idx
+        elif h == "начало участка, км":
+            result["start_km"] = idx
+        elif h == "точка начала":
+            result["start_point"] = idx
+        elif h == "длина, км":
+            result["length"] = idx
+        elif h == "точка конца":
+            result["end_point"] = idx
+        elif h == "обратное направление":
+            result["reverse_direction"] = idx
+        elif h.startswith("мощность,"):
+            result["power"] = idx
+        elif h.startswith("давление,"):
+            result["pressure"] = idx
+        elif h.startswith("диаметр труб,"):
+            result["diameter"] = idx
+        elif h == "состояние газопровода":
+            result["state"] = idx
+        elif h == "принадлежность к трансгазу":
+            result["transgas"] = idx
+        elif h == "примечание":
+            result["remark"] = idx
+        elif h == "субъект рф":
+            result["region"] = idx
+        elif h.startswith("точки перемычки"):
+            result["switch_flag"] = idx
+    return result
+
+
+def row_value(row, hmap, field):
+    idx = hmap.get(field)
+    if idx is None or idx >= len(row):
+        return None
+    return row[idx]
+
+
+def parse_source_data(rows):
+    header_index = None
+    hmap = None
+    for i, row in enumerate(rows[:50]):
+        if detect_header(row):
+            header_index = i
+            hmap = make_header_map(row)
+            break
+    if header_index is None:
+        raise RuntimeError("Не найдена строка заголовков таблицы «Сегменты».")
+
+    required = set(STRUCTURAL_FIELDS)
+    missing = sorted(required - set(hmap))
+    if missing:
+        raise RuntimeError("В исходнике не найдены колонки: " + ", ".join(missing))
+
+    records = []
+    for source_row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+        record = {
+            "source_row": source_row_number,
+            "attr_field": row_value(row, hmap, "attr_field"),
+            "pipeline": row_value(row, hmap, "pipeline"),
+            "start_km": row_value(row, hmap, "start_km"),
+            "start_point": row_value(row, hmap, "start_point"),
+            "length": row_value(row, hmap, "length"),
+            "end_point": row_value(row, hmap, "end_point"),
+            "reverse_direction": row_value(row, hmap, "reverse_direction"),
+            "power": row_value(row, hmap, "power"),
+            "pressure": row_value(row, hmap, "pressure"),
+            "diameter": row_value(row, hmap, "diameter"),
+            "state": row_value(row, hmap, "state"),
+            "transgas": row_value(row, hmap, "transgas"),
+            "remark": row_value(row, hmap, "remark"),
+            "region": row_value(row, hmap, "region"),
+            "switch_flag": row_value(row, hmap, "switch_flag"),
+        }
+
+        # Реальная строка сегмента должна иметь хотя бы название и две точки.
+        if not norm_text(record["pipeline"]):
+            continue
+        if not norm_text(record["start_point"]) and not norm_text(record["end_point"]):
+            continue
+        records.append(record)
+
+    return records
+
+
+def load_source_records(path):
+    suffix = Path(path).suffix.lower()
+
+    if suffix in {".xlsx", ".xlsm"}:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheets = []
+            if "Сегменты" in wb.sheetnames:
+                sheets.append(wb["Сегменты"])
+            sheets.extend(ws for ws in wb.worksheets if ws.title != "Сегменты")
+
+            last_error = None
+            for ws in sheets:
+                rows = [list(row) for row in ws.iter_rows(values_only=True)]
+                try:
+                    return parse_source_data(rows), ws.title
+                except RuntimeError as exc:
+                    last_error = exc
+            raise last_error or RuntimeError("Лист с таблицей «Сегменты» не найден.")
+        finally:
+            wb.close()
+
+    if suffix in {".txt", ".tsv", ".csv"}:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.reader(f, delimiter="\t", quotechar='"'))
+        return parse_source_data(rows), Path(path).name
+
+    raise RuntimeError("Поддерживаются .xlsx, .xlsm, .txt, .tsv.")
+
+
+# ---------------------------------------------------------------------------
+# ЧТЕНИЕ БД ИЗ QGIS
+# ---------------------------------------------------------------------------
+
+def build_db_records(layers):
+    segment_layer = layers["GasPipeSegments"]
+    gts_layer = layers["GtsPoints"]
+    pipeline_layer = layers["GasPipelines"]
+    transgas_layer = layers["TransGases"]
+    region_layer = layers["Regions"]
+
+    gts_index = build_index(gts_layer)
+    pipeline_index = build_index(pipeline_layer)
+    transgas_index = build_index(transgas_layer)
+    region_index = build_index(region_layer)
+
+    records = []
+    for feature in segment_layer.getFeatures():
+        segment_id = attr(segment_layer, feature, "Id", "id")
+        start_id = attr(segment_layer, feature, "StartGtsPointId")
+        end_id = attr(segment_layer, feature, "EndGtsPointId")
+        pipeline_id = attr(segment_layer, feature, "GasPipelineId")
+        transgas_id = attr(segment_layer, feature, "TransGasId")
+        region_id = attr(segment_layer, feature, "RegionId")
+
+        record = {
+            "segment_id": segment_id,
+            "pipeline": display_value(pipeline_layer, pipeline_index, pipeline_id, "Name", "naim"),
+            "start_km": attr(segment_layer, feature, "StartKilometer"),
+            "start_point": display_value(gts_layer, gts_index, start_id, "Name", "naim"),
+            "length": attr(segment_layer, feature, "Length"),
+            "end_point": display_value(gts_layer, gts_index, end_id, "Name", "naim"),
+            "power": attr(segment_layer, feature, "Power"),
+            "pressure": attr(segment_layer, feature, "Pressure"),
+            "diameter": attr(segment_layer, feature, "Diameter"),
+            "state": attr(segment_layer, feature, "State"),
+            "transgas": display_value(transgas_layer, transgas_index, transgas_id, "Name", "naim"),
+            "remark": attr(segment_layer, feature, "Remark"),
+            "region": display_value(region_layer, region_index, region_id, "Name", "naim"),
+        }
+        records.append(record)
+    return records
+
+
+# ---------------------------------------------------------------------------
+# СОПОСТАВЛЕНИЕ КАК МУЛЬТИМНОЖЕСТВО
+# ---------------------------------------------------------------------------
+
+def match_records(source_records, db_records):
+    ordered_full_pool = defaultdict(list)
+    unordered_full_pool = defaultdict(list)
+    ordered_struct_pool = defaultdict(list)
+    unordered_struct_pool = defaultdict(list)
+    derived_pool = defaultdict(list)
+    endpoint_pool = defaultdict(list)
+
+    for db_idx, db in enumerate(db_records):
+        ordered_full_pool[full_key(db)].append(db_idx)
+        unordered_full_pool[full_key_unordered(db)].append(db_idx)
+        ordered_struct_pool[structural_key(db)].append(db_idx)
+        unordered_struct_pool[structural_key_unordered(db)].append(db_idx)
+        derived_pool[derived_key(db)].append(db_idx)
+        endpoint_pool[endpoint_pair_key(db)].append(db_idx)
+
+    used_db = set()
+    results = [None] * len(source_records)
+    ambiguous = []
+
+    def numeric_distance(a, b):
+        try:
+            aa = float(norm_num(a))
+            bb = float(norm_num(b))
+            return abs(aa - bb)
+        except Exception:
+            return 10**12
+
+    def choose_unique(candidates, src, allow_used=False):
+        if not allow_used:
+            candidates = [i for i in candidates if i not in used_db]
+        if not candidates:
+            return None, [], 0, False
+
+        scored = []
+        for db_idx in candidates:
+            mismatches = mismatch_fields(src, db_records[db_idx])
+            scored.append((len(mismatches), db_idx, mismatches))
+        scored.sort(key=lambda x: (x[0], str(db_records[x[1]].get("segment_id") or "")))
+
+        best_score = scored[0][0]
+        best = [item for item in scored if item[0] == best_score]
+        if len(best) == 1:
+            return best[0][1], best[0][2], len(candidates), False
+
+        if best_score == 0:
+            return best[0][1], best[0][2], len(candidates), False
+
+        signatures = {full_key_unordered(db_records[item[1]]) for item in best}
+        if len(signatures) == 1:
+            return best[0][1], best[0][2], len(candidates), False
+
+        return None, [], len(candidates), True
+
+    def choose_by_endpoints(candidates, src, allow_reuse_if_needed=True):
+        """
+        Выбор физического сегмента по газопроводу + двум конечным точкам.
+        Length и StartKilometer не являются обязательными: они только
+        помогают выбрать лучший вариант, если кандидатов несколько.
+        """
+        free = [i for i in candidates if i not in used_db]
+        pool = free if free else (candidates if allow_reuse_if_needed else [])
+        if not pool:
+            return None, [], 0, False, False
+
+        scored = []
+        src_a = norm_point(src.get("start_point"))
+        src_b = norm_point(src.get("end_point"))
+
+        for db_idx in pool:
+            db = db_records[db_idx]
+            mismatches = mismatch_fields(src, db)
+
+            db_a = norm_point(db.get("start_point"))
+            db_b = norm_point(db.get("end_point"))
+            same_order = (src_a == db_a and src_b == db_b)
+
+            score = (
+                len(mismatches),
+                numeric_distance(src.get("start_km"), db.get("start_km")),
+                numeric_distance(src.get("length"), db.get("length")),
+                0 if same_order else 1,
+                str(db.get("segment_id") or ""),
+            )
+            scored.append((score, db_idx, mismatches))
+
+        scored.sort(key=lambda x: x[0])
+        best_score = scored[0][0][:-1]
+        best = [x for x in scored if x[0][:-1] == best_score]
+
+        # Даже если UUID разные, при одинаковом итоговом рейтинге
+        # для Excel выбираем первый: идентификатор UUID не экспортируется.
+        chosen = best[0]
+        reused = chosen[1] in used_db
+        return chosen[1], chosen[2], len(candidates), False, reused
+
+    # ------------------------------------------------------------------
+    # Обычные физические строки.
+    # ------------------------------------------------------------------
+    for src_idx, src in enumerate(source_records):
+        if is_derived_source(src):
+            continue
+
+        candidates = ordered_full_pool.get(full_key(src), [])
+        db_idx, mismatches, count, amb = choose_unique(candidates, src)
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "ТОЧНО_ПОРЯДОК",
+                "db_idx": db_idx, "mismatches": mismatches, "candidate_count": count,
+            }
+            continue
+
+        candidates = unordered_full_pool.get(full_key_unordered(src), [])
+        db_idx, mismatches, count, amb = choose_unique(candidates, src)
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "ТОЧНО_РАЗВОРОТ",
+                "db_idx": db_idx, "mismatches": mismatches, "candidate_count": count,
+            }
+            continue
+
+        candidates = ordered_struct_pool.get(structural_key(src), [])
+        db_idx, mismatches, count, amb = choose_unique(candidates, src)
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "РЕЗЕРВ_ПОРЯДОК",
+                "db_idx": db_idx, "mismatches": mismatches, "candidate_count": count,
+            }
+            continue
+
+        candidates = unordered_struct_pool.get(structural_key_unordered(src), [])
+        db_idx, mismatches, count, amb = choose_unique(candidates, src)
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "РЕЗЕРВ_РАЗВОРОТ",
+                "db_idx": db_idx, "mismatches": mismatches, "candidate_count": count,
+            }
+            continue
+
+        # Главное новое правило v5:
+        # один и тот же газопровод + те же две физические точки.
+        # Технический "ТСГ " перед именем точки игнорируется.
+        # Length/StartKilometer могут измениться и не блокируют сопоставление.
+        candidates = endpoint_pool.get(endpoint_pair_key(src), [])
+        db_idx, mismatches, count, amb, reused = choose_by_endpoints(candidates, src)
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "ПО_ТОЧКАМ_ПОВТОР" if reused else "ПО_ТОЧКАМ",
+                "db_idx": db_idx, "mismatches": mismatches, "candidate_count": count,
+            }
+            continue
+
+        results[src_idx] = {
+            "status": "НЕ НАЙДЕНО",
+            "db_idx": None,
+            "mismatches": [],
+            "candidate_count": 0,
+        }
+
+    # ------------------------------------------------------------------
+    # «Обратное» / «кольцо».
+    # Сначала прежний ключ, затем те же две физические точки без Length.
+    # Повторное использование DB-сегмента здесь допустимо.
+    # ------------------------------------------------------------------
+    for src_idx, src in enumerate(source_records):
+        if not is_derived_source(src):
+            continue
+
+        candidates = derived_pool.get(derived_key(src), [])
+        if candidates:
+            used_candidates = [i for i in candidates if i in used_db]
+            pool = used_candidates if used_candidates else candidates
+            db_idx, mismatches, count, amb = choose_unique(pool, src, allow_used=True)
+            if db_idx is not None:
+                was_used = db_idx in used_db
+                used_db.add(db_idx)
+                results[src_idx] = {
+                    "status": "ПРОИЗВОДНАЯ_ПОВТОР" if was_used else "ПРОИЗВОДНАЯ_СЕГМЕНТ",
+                    "db_idx": db_idx, "mismatches": mismatches,
+                    "candidate_count": len(candidates),
+                }
+                continue
+
+        candidates = endpoint_pool.get(endpoint_pair_key(src), [])
+        db_idx, mismatches, count, amb, reused = choose_by_endpoints(
+            candidates, src, allow_reuse_if_needed=True
+        )
+        if db_idx is not None:
+            used_db.add(db_idx)
+            results[src_idx] = {
+                "status": "ПРОИЗВОДНАЯ_ПО_ТОЧКАМ",
+                "db_idx": db_idx, "mismatches": mismatches,
+                "candidate_count": count,
+            }
+            continue
+
+        results[src_idx] = {
+            "status": "НЕ НАЙДЕНО",
+            "db_idx": None,
+            "mismatches": [],
+            "candidate_count": 0,
+        }
+
+    return results, used_db, ambiguous
+
+
+def endpoint_pair_key(record):
+    """Газопровод + две конечные точки без учета направления."""
+    return (
+        norm_text(record.get("pipeline")),
+        point_pair(record),
+    )
+
+
+def pipeline_point_key(record, point_field):
+    return (
+        norm_text(record.get("pipeline")),
+        norm_point(record.get(point_field)),
+    )
+
+
+def analyze_not_found(source_records, db_records, results, used_db):
+    """
+    Уточняет причины строк НЕ НАЙДЕНО.
+
+    Для строк, где прямая связь между теми же двумя точками в БД есть,
+    отдельно различает:
+    - КАНДИДАТ_УЖЕ_ИСПОЛЬЗОВАН: все такие DB-сегменты уже заняты другой
+      исходной строкой;
+    - ОТЛИЧАЕТСЯ_START_KM;
+    - ОТЛИЧАЕТСЯ_LENGTH;
+    - ОТЛИЧАЕТСЯ_START_KM_LENGTH.
+
+    Остальные категории:
+    - ОБЕ_ТОЧКИ_ЕСТЬ_БЕЗ_ПРЯМОЙ;
+    - ТОЛЬКО_ОДНА_ТОЧКА;
+    - ТОЧКИ_НЕ_НАЙДЕНЫ.
+    """
+    pair_pool = defaultdict(list)
+    point_pool = defaultdict(list)
+
+    for db_idx, db in enumerate(db_records):
+        pair_pool[endpoint_pair_key(db)].append(db_idx)
+        pipeline = norm_text(db.get("pipeline"))
+        a = norm_point(db.get("start_point"))
+        b = norm_point(db.get("end_point"))
+        if a:
+            point_pool[(pipeline, a)].append(db_idx)
+        if b:
+            point_pool[(pipeline, b)].append(db_idx)
+
+    analysis = []
+
+    for src_idx, (src, result) in enumerate(zip(source_records, results)):
+        if result["status"] != "НЕ НАЙДЕНО":
+            continue
+
+        direct = pair_pool.get(endpoint_pair_key(src), [])
+        unused_direct = [i for i in direct if i not in used_db]
+
+        pipeline = norm_text(src.get("pipeline"))
+        start_name = norm_point(src.get("start_point"))
+        end_name = norm_point(src.get("end_point"))
+        start_incident = point_pool.get((pipeline, start_name), []) if start_name else []
+        end_incident = point_pool.get((pipeline, end_name), []) if end_name else []
+
+        scored = []
+        best_db_idx = None
+        diff_fields_all = []
+
+        if direct:
+            # Показываем лучший физический кандидат независимо от того,
+            # занят он другой строкой или нет.
+            candidate_pool = unused_direct if unused_direct else direct
+            for db_idx in candidate_pool:
+                db = db_records[db_idx]
+
+                diff_fields = []
+                if norm_num(src.get("start_km")) != norm_num(db.get("start_km")):
+                    diff_fields.append("start_km")
+                if norm_num(src.get("length")) != norm_num(db.get("length")):
+                    diff_fields.append("length")
+                diff_fields.extend(mismatch_fields(src, db))
+
+                scored.append((len(diff_fields), db_idx, diff_fields))
+
+            scored.sort(key=lambda x: (x[0], str(db_records[x[1]].get("segment_id") or "")))
+            best_score, best_db_idx, diff_fields_all = scored[0]
+
+            if not unused_direct:
+                category = "КАНДИДАТ_УЖЕ_ИСПОЛЬЗОВАН"
+            else:
+                km_diff = "start_km" in diff_fields_all
+                len_diff = "length" in diff_fields_all
+                if km_diff and len_diff:
+                    category = "ОТЛИЧАЕТСЯ_START_KM_LENGTH"
+                elif km_diff:
+                    category = "ОТЛИЧАЕТСЯ_START_KM"
+                elif len_diff:
+                    category = "ОТЛИЧАЕТСЯ_LENGTH"
+                else:
+                    # Теоретически сюда попадать не должны: если start_km и length
+                    # совпадают, резервный структурный ключ v3 уже нашел бы строку.
+                    category = "ПРОЧЕЕ_ПРЯМАЯ_СВЯЗЬ"
+        elif start_incident and end_incident:
+            category = "ОБЕ_ТОЧКИ_ЕСТЬ_БЕЗ_ПРЯМОЙ"
+        elif start_incident or end_incident:
+            category = "ТОЛЬКО_ОДНА_ТОЧКА"
+        else:
+            category = "ТОЧКИ_НЕ_НАЙДЕНЫ"
+
+        analysis.append({
+            "src_idx": src_idx,
+            "category": category,
+            "direct": direct,
+            "unused_direct": unused_direct,
+            "scored": scored,
+            "best_db_idx": best_db_idx,
+            "best_diff_fields": diff_fields_all,
+            "start_incident": start_incident,
+            "end_incident": end_incident,
+        })
+
+    return analysis
+
+
+# ---------------------------------------------------------------------------
+# XLSX ОТЧЁТ
+# ---------------------------------------------------------------------------
+
+def style_sheet(ws, freeze="A2"):
+    ws.freeze_panes = freeze
+    ws.sheet_view.showGridLines = False
+    fill = PatternFill("solid", fgColor="1F4E78")
+    font = Font(color="FFFFFF", bold=True)
+    for cell in ws[1]:
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for column_cells in ws.columns:
+        values = [str(c.value) for c in column_cells if c.value is not None]
+        if not values:
+            continue
+        width = min(max(max(len(v) for v in values) + 2, 10), 45)
+        ws.column_dimensions[get_column_letter(column_cells[0].column)].width = width
+
+
+def append_record_values(ws, prefix, record):
+    ws.append(prefix + [
+        display_clean(record.get("attr_field")),
+        display_clean(record.get("pipeline")),
+        display_clean(record.get("start_km")),
+        display_clean(record.get("start_point")),
+        display_clean(record.get("length")),
+        display_clean(record.get("end_point")),
+        display_clean(record.get("reverse_direction")),
+        display_clean(record.get("power")),
+        display_clean(record.get("pressure")),
+        display_clean(record.get("diameter")),
+        display_clean(record.get("state")),
+        display_clean(record.get("transgas")),
+        display_clean(record.get("remark")),
+        display_clean(record.get("region")),
+        display_clean(record.get("switch_flag")),
+    ])
+
+
+def write_report(path, source_name, source_records, db_records, results, used_db, ambiguous):
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    status_counts = Counter(r["status"] for r in results)
+    not_found_analysis = analyze_not_found(source_records, db_records, results, used_db)
+    cause_counts = Counter(item["category"] for item in not_found_analysis)
+
+    # 1. Итог
+    ws = wb.create_sheet("Итог")
+    ws.append(["Показатель", "Значение"])
+    summary = [
+        ("Источник", source_name),
+        ("Строк исходника", len(source_records)),
+        ("Ожидалось строк исходника", EXPECTED_SOURCE_COUNT),
+        ("GasPipeSegments в БД", len(db_records)),
+        ("ТОЧНО_ПОРЯДОК", status_counts.get("ТОЧНО_ПОРЯДОК", 0)),
+        ("ТОЧНО_РАЗВОРОТ", status_counts.get("ТОЧНО_РАЗВОРОТ", 0)),
+        ("РЕЗЕРВ_ПОРЯДОК", status_counts.get("РЕЗЕРВ_ПОРЯДОК", 0)),
+        ("РЕЗЕРВ_РАЗВОРОТ", status_counts.get("РЕЗЕРВ_РАЗВОРОТ", 0)),
+        ("ПО_ТОЧКАМ", status_counts.get("ПО_ТОЧКАМ", 0)),
+        ("ПО_ТОЧКАМ_ПОВТОР", status_counts.get("ПО_ТОЧКАМ_ПОВТОР", 0)),
+        ("ПРОИЗВОДНАЯ_ПОВТОР", status_counts.get("ПРОИЗВОДНАЯ_ПОВТОР", 0)),
+        ("ПРОИЗВОДНАЯ_СЕГМЕНТ", status_counts.get("ПРОИЗВОДНАЯ_СЕГМЕНТ", 0)),
+        ("ПРОИЗВОДНАЯ_ПО_ТОЧКАМ", status_counts.get("ПРОИЗВОДНАЯ_ПО_ТОЧКАМ", 0)),
+        ("НЕОДНОЗНАЧНО", status_counts.get("НЕОДНОЗНАЧНО", 0)),
+        ("НЕ НАЙДЕНО", status_counts.get("НЕ НАЙДЕНО", 0)),
+        ("--- причины НЕ НАЙДЕНО ---", ""),
+        ("КАНДИДАТ_УЖЕ_ИСПОЛЬЗОВАН", cause_counts.get("КАНДИДАТ_УЖЕ_ИСПОЛЬЗОВАН", 0)),
+        ("ОТЛИЧАЕТСЯ_START_KM", cause_counts.get("ОТЛИЧАЕТСЯ_START_KM", 0)),
+        ("ОТЛИЧАЕТСЯ_LENGTH", cause_counts.get("ОТЛИЧАЕТСЯ_LENGTH", 0)),
+        ("ОТЛИЧАЕТСЯ_START_KM_LENGTH", cause_counts.get("ОТЛИЧАЕТСЯ_START_KM_LENGTH", 0)),
+        ("ПРОЧЕЕ_ПРЯМАЯ_СВЯЗЬ", cause_counts.get("ПРОЧЕЕ_ПРЯМАЯ_СВЯЗЬ", 0)),
+        ("ОБЕ_ТОЧКИ_ЕСТЬ_БЕЗ_ПРЯМОЙ", cause_counts.get("ОБЕ_ТОЧКИ_ЕСТЬ_БЕЗ_ПРЯМОЙ", 0)),
+        ("ТОЛЬКО_ОДНА_ТОЧКА", cause_counts.get("ТОЛЬКО_ОДНА_ТОЧКА", 0)),
+        ("ТОЧКИ_НЕ_НАЙДЕНЫ", cause_counts.get("ТОЧКИ_НЕ_НАЙДЕНЫ", 0)),
+        ("Использовано строк БД", len(used_db)),
+        ("Не использовано строк БД", len(db_records) - len(used_db)),
+    ]
+    for row in summary:
+        ws.append(row)
+    style_sheet(ws)
+
+    # Общие заголовки исходной строки.
+    src_headers = [
+        "Атрибутивное поле", "Наименование", "Начало участка, км", "Точка начала",
+        "Длина, км", "Точка конца", "Обратное направление", "Мощность",
+        "Давление", "Диаметр", "Состояние", "ТрансГаз", "Примечание",
+        "Субъект РФ", "Флаг перемычки",
+    ]
+
+    # 2. Все сопоставления.
+    ws = wb.create_sheet("Сопоставление")
+    ws.append([
+        "Строка исходника", "Статус", "SegmentId", "Кандидатов",
+        "Отличаются поля",
+    ] + src_headers)
+    for src, result in zip(source_records, results):
+        db_idx = result["db_idx"]
+        segment_id = db_records[db_idx].get("segment_id") if db_idx is not None else None
+        append_record_values(
+            ws,
+            [
+                src["source_row"], result["status"], segment_id,
+                result["candidate_count"], ", ".join(result["mismatches"]),
+            ],
+            src,
+        )
+    style_sheet(ws)
+
+    # 3. Не найдено.
+    ws = wb.create_sheet("Не_найдено")
+    ws.append(["Строка исходника", "Статус"] + src_headers)
+    for src, result in zip(source_records, results):
+        if result["status"] == "НЕ НАЙДЕНО":
+            append_record_values(ws, [src["source_row"], result["status"]], src)
+    style_sheet(ws)
+
+    # 4. Неоднозначно — показываем каждого кандидата.
+    ws = wb.create_sheet("Неоднозначно")
+    ws.append([
+        "Строка исходника", "Кандидатов", "SegmentId кандидата", "Число отличий",
+        "Отличаются поля", "Наименование", "Начало участка, км", "Точка начала",
+        "Длина, км", "Точка конца", "Мощность БД", "Давление БД", "Диаметр БД",
+        "Состояние БД", "ТрансГаз БД", "Примечание БД", "Субъект РФ БД",
+    ])
+    for src_idx, scored in ambiguous:
+        src = source_records[src_idx]
+        for score, db_idx, mismatches in scored:
+            db = db_records[db_idx]
+            ws.append([
+                src["source_row"], len(scored), db.get("segment_id"), score,
+                ", ".join(mismatches), src.get("pipeline"), src.get("start_km"),
+                src.get("start_point"), src.get("length"), src.get("end_point"),
+                db.get("power"), db.get("pressure"), db.get("diameter"), db.get("state"),
+                db.get("transgas"), db.get("remark"), db.get("region"),
+            ])
+    style_sheet(ws)
+
+    # 5. Причины строк "НЕ НАЙДЕНО".
+    ws = wb.create_sheet("Причины_не_найдено")
+    ws.append([
+        "Строка исходника", "Категория", "Прямых кандидатов",
+        "Свободных прямых кандидатов", "Лучший SegmentId",
+        "Отличаются поля",
+        "Сегментов у точки начала", "Сегментов у точки конца",
+        "Атрибутивное поле", "Наименование", "Начало участка, км",
+        "Точка начала", "Длина, км", "Точка конца", "Обратное направление",
+        "Флаг перемычки",
+    ])
+    for item in not_found_analysis:
+        src = source_records[item["src_idx"]]
+        best_id = ""
+        if item.get("best_db_idx") is not None:
+            best_id = db_records[item["best_db_idx"]].get("segment_id")
+        ws.append([
+            src["source_row"], item["category"], len(item["direct"]),
+            len(item.get("unused_direct", [])), best_id,
+            ", ".join(item.get("best_diff_fields", [])),
+            len(item["start_incident"]), len(item["end_incident"]),
+            src.get("attr_field"), src.get("pipeline"), src.get("start_km"),
+            src.get("start_point"), src.get("length"), src.get("end_point"),
+            src.get("reverse_direction"), src.get("switch_flag"),
+        ])
+    style_sheet(ws)
+
+    # 6. Если прямая связь между исходными точками в БД есть,
+    # показываем реальные значения кандидатов и то, чем они отличаются.
+    ws = wb.create_sheet("Прямые_кандидаты")
+    ws.append([
+        "Строка исходника", "Категория", "Кандидатов", "Свободных кандидатов",
+        "SegmentId", "Кандидат уже использован", "Число отличий",
+        "Отличаются поля",
+        "Исходник: начало км", "БД: начало км",
+        "Исходник: точка начала", "БД: точка начала",
+        "Исходник: длина", "БД: длина",
+        "Исходник: точка конца", "БД: точка конца",
+        "Мощность БД", "Давление БД", "Диаметр БД",
+        "Состояние БД", "ТрансГаз БД", "Примечание БД", "Субъект РФ БД",
+    ])
+    for item in not_found_analysis:
+        if not item["direct"]:
+            continue
+        src = source_records[item["src_idx"]]
+        for score, db_idx, mismatches in item["scored"]:
+            db = db_records[db_idx]
+            ws.append([
+                src["source_row"], item["category"], len(item["direct"]),
+                len(item.get("unused_direct", [])), db.get("segment_id"),
+                "ДА" if db_idx in used_db else "",
+                score, ", ".join(mismatches),
+                src.get("start_km"), db.get("start_km"),
+                src.get("start_point"), db.get("start_point"),
+                src.get("length"), db.get("length"),
+                src.get("end_point"), db.get("end_point"),
+                db.get("power"), db.get("pressure"), db.get("diameter"),
+                db.get("state"), db.get("transgas"), db.get("remark"), db.get("region"),
+            ])
+    style_sheet(ws)
+
+    # 7. Неиспользованные строки БД.
+    ws = wb.create_sheet("Лишние_БД")
+    ws.append([
+        "SegmentId", "Наименование", "Начало участка, км", "Точка начала", "Длина, км",
+        "Точка конца", "Мощность", "Давление", "Диаметр", "Состояние", "ТрансГаз",
+        "Примечание", "Субъект РФ",
+    ])
+    for i, db in enumerate(db_records):
+        if i in used_db:
+            continue
+        ws.append([
+            db.get("segment_id"), db.get("pipeline"), db.get("start_km"), db.get("start_point"),
+            db.get("length"), db.get("end_point"), db.get("power"), db.get("pressure"),
+            db.get("diameter"), db.get("state"), db.get("transgas"), db.get("remark"),
+            db.get("region"),
+        ])
+    style_sheet(ws)
+
+    # 8. Разница кратности по структурному ключу.
+    source_counter = Counter(structural_key(r) for r in source_records)
+    db_counter = Counter(structural_key(r) for r in db_records)
+    keys = sorted(
+        set(source_counter) | set(db_counter),
+        key=lambda k: tuple(str(x) for x in k),
+    )
+
+    ws = wb.create_sheet("Кратность")
+    ws.append([
+        "Наименование(norm)", "Начало км(norm)", "Точка начала(norm)",
+        "Длина(norm)", "Точка конца(norm)", "Исходник", "БД", "БД-Исходник",
+    ])
+    for key in keys:
+        src_count = source_counter.get(key, 0)
+        db_count = db_counter.get(key, 0)
+        if src_count == db_count:
+            continue
+        ws.append(list(key) + [src_count, db_count, db_count - src_count])
+    style_sheet(ws)
+
+    wb.save(path)
+
+
+# ---------------------------------------------------------------------------
+# ЗАПУСК
+# ---------------------------------------------------------------------------
+
+def main():
+    layers = {name: get_layer(name) for name in REQUIRED_LAYERS}
+    missing = [name for name, layer in layers.items() if layer is None]
+    if missing:
+        QMessageBox.critical(
+            None,
+            "Не хватает слоёв",
+            "Загрузите в проект QGIS:\n\n" + "\n".join(missing),
+        )
+        return
+
+    source_path, _ = QFileDialog.getOpenFileName(
+        None,
+        "Выберите ИСХОДНЫЙ файл с таблицей «Сегменты»",
+        "",
+        "Источник (*.xlsx *.xlsm *.txt *.tsv);;Все файлы (*.*)",
+    )
+    if not source_path:
+        return
+
+    desktop = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
+    default_output = str(Path(desktop) / "Диагностика_сегментов_v5.xlsx")
+    output_path, _ = QFileDialog.getSaveFileName(
+        None,
+        "Сохранить диагностику",
+        default_output,
+        "Excel (*.xlsx)",
+    )
+    if not output_path:
+        return
+    if not output_path.lower().endswith(".xlsx"):
+        output_path += ".xlsx"
+
+    try:
+        source_records, source_name = load_source_records(source_path)
+        db_records = build_db_records(layers)
+        results, used_db, ambiguous = match_records(source_records, db_records)
+        write_report(
+            output_path,
+            source_name,
+            source_records,
+            db_records,
+            results,
+            used_db,
+            ambiguous,
+        )
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "Ошибка диагностики",
+            f"{type(exc).__name__}: {exc}",
+        )
+        raise
+
+    counts = Counter(r["status"] for r in results)
+    QMessageBox.information(
+        None,
+        "Диагностика готова",
+        "Файл сохранён:\n"
+        f"{output_path}\n\n"
+        f"Исходник: {len(source_records)}\n"
+        f"БД: {len(db_records)}\n"
+        f"Точно (порядок): {counts.get('ТОЧНО_ПОРЯДОК', 0)}\n"
+        f"Точно (разворот): {counts.get('ТОЧНО_РАЗВОРОТ', 0)}\n"
+        f"Резерв: {counts.get('РЕЗЕРВ_ПОРЯДОК', 0) + counts.get('РЕЗЕРВ_РАЗВОРОТ', 0)}\n"
+        f"По конечным точкам: {counts.get('ПО_ТОЧКАМ', 0) + counts.get('ПО_ТОЧКАМ_ПОВТОР', 0)}\n"
+        f"Производные: {counts.get('ПРОИЗВОДНАЯ_ПОВТОР', 0) + counts.get('ПРОИЗВОДНАЯ_СЕГМЕНТ', 0) + counts.get('ПРОИЗВОДНАЯ_ПО_ТОЧКАМ', 0)}\n"
+        f"Неоднозначно: {counts.get('НЕОДНОЗНАЧНО', 0)}\n"
+        f"Не найдено: {counts.get('НЕ НАЙДЕНО', 0)}\n"
+        f"Не использовано БД: {len(db_records) - len(used_db)}",
+    )
+
+
+main()
