@@ -263,8 +263,14 @@ def main():
     desktop = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
     default_path = str(Path(desktop) / "Координаты_отдельных_объектов.xlsx")
 
+    try:
+        from qgis.utils import iface
+        parent = iface.mainWindow()
+    except Exception:
+        parent = None
+
     output_path, _ = QFileDialog.getSaveFileName(
-        None,
+        parent,
         "Сохранить координаты отдельных объектов",
         default_path,
         "Excel (*.xlsx)",
@@ -552,5 +558,6 @@ def main():
         )
 
 
-if __name__ == "__main__":
-    main()
+# В редакторе Python QGIS файл может запускаться не с __name__ == "__main__",
+# поэтому запускаем функцию напрямую.
+main()
