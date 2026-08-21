@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Самостоятельная выгрузка листа «Координаты отдельных объектов».
+Самостоятельная выгрузка «Координаты отдельных объектов» — v2.
 
-ВАЖНО:
-- исходный Excel НЕ используется;
-- данные берутся только из текущего проекта QGIS / PostgreSQL;
-- ожидаемый результат по согласованной логике: 4558 строк;
-- 7 новых ConnectionPoints исключаются;
-- 20 специальных ТСГ добавляются из GasDeliveryPoints;
-- 4 старые точки восстанавливаются из текущего GtsPoints;
-- технический префикс «ТСГ » в имени при выгрузке снимается;
-- орфография и остальная часть имени НЕ исправляются.
+Источник: только текущие таблицы/слои QGIS/PostgreSQL.
+Исходный Excel НЕ используется.
 
-В книге создаются два листа:
-1) «Координаты отдельных объектов»
-2) «Контроль» — чтобы сразу видеть, что найдено/не найдено.
+Согласованная логика:
+1. Все ConnectionPoints выгружаются как отдельные записи БД.
+   Одинаковые имена НЕ схлопываются.
+2. 7 новых ConnectionPoints исключаются.
+3. Добавляются 20 подтверждённых GasDeliveryPoints (ТСГ).
+   Префикс «ТСГ » снимается только при выводе имени.
+4. Для 4 подтверждённых узлов добавляется ещё одна строка.
+   Если в GtsPoints есть второй объект с таким же именем, берутся его
+   актуальные координаты; иначе повторяется актуальная строка из БД.
+5. Никакого специального правила для 182 км Уренгой-Новопсков и
+   5 км отвод на Клинцы нет.
+
+Ожидаемый результат при текущем составе БД: 4558 строк.
 """
 
 import re
@@ -30,8 +33,7 @@ try:
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 except Exception as exc:
     raise RuntimeError(
-        "Не удалось импортировать openpyxl. "
-        "Запустите скрипт в той же среде QGIS, где работает основной экспорт.\n"
+        "Не удалось импортировать openpyxl.\n"
         f"{exc}"
     )
 
@@ -39,7 +41,7 @@ except Exception as exc:
 EXPECTED_CONNECTION_COUNT = 4541
 EXPECTED_FINAL_COUNT = 4558
 
-# Эти 7 ConnectionPoints появились позже и в обратную выгрузку не включаются.
+# Эти ConnectionPoints появились позднее и в обратную выгрузку не входят.
 EXCLUDED_CONNECTIONS = {
     "1 км отвод на Обнинск",
     "162 км Тула-Торжок",
@@ -50,47 +52,47 @@ EXCLUDED_CONNECTIONS = {
     "36 км Якшуновская СПХГ-КС Белоусово",
 }
 
-# 20 подтвержденных GasDeliveryPoints, которые должны присутствовать
-# на листе координат. В GtsPoints они могут храниться с префиксом «ТСГ ».
-TSG_POINTS = {
-    "0 км Астраханский ГПЗ-Замьяны",
-    "0 км Астраханский ГПЗ-Камыш-Бурун",
-    "0 км Бованенково-Ухта",
-    "0 км Заполярное-Уренгой",
-    "0 км Коробки-Лог",
-    "0 км Медвежье-Надым",
-    "0 км Миннибаево-Ижевск",
-    "0 км Миннибаево-Казань",
-    "0 км Нефтегорский ГПЗ-Самара",
-    "0 км Нижневартовский ГПЗ-Парабель",
-    "0 км Отрадненский ГПЗ-Тольятти",
-    "0 км Ставрополь-КС Невинномысская",
-    "0 км УКПГ-15-КС Ямбургская",
-    "0 км Усинский ГПЗ-КС Ухта",
-    "16,5 км УКПГ-15-КС Ямбургская",
-    "254 км Шкапово-Ишимбай",
-    "31 км УКПГ-15-КС Ямбургская",
-    "622,51 км Уренгой-Челябинск",
-    "0 км Оренбург-Заинск",
-    "0 км Выгнапуровский ГПЗ-Уренгой-Челябинск",
-}
+# 20 позиций ТСГ, которые должны быть дополнительно представлены
+# на листе координат.
+#
+# Для Ставролен/Ставрополь разрешены оба варианта написания ТОЛЬКО
+# для поиска объекта в БД. В Excel выводится фактическое имя из БД.
+TSG_SLOTS = [
+    ("0 км Астраханский ГПЗ-Замьяны",),
+    ("0 км Астраханский ГПЗ-Камыш-Бурун",),
+    ("0 км Бованенково-Ухта",),
+    ("0 км Заполярное-Уренгой",),
+    ("0 км Коробки-Лог",),
+    ("0 км Медвежье-Надым",),
+    ("0 км Миннибаево-Ижевск",),
+    ("0 км Миннибаево-Казань",),
+    ("0 км Нефтегорский ГПЗ-Самара",),
+    ("0 км Нижневартовский ГПЗ-Парабель",),
+    ("0 км Отрадненский ГПЗ-Тольятти",),
+    (
+        "0 км Ставролен-КС Невинномысская",
+        "0 км Ставрополь-КС Невинномысская",
+    ),
+    ("0 км УКПГ-15-КС Ямбургская",),
+    ("0 км Усинский ГПЗ-КС Ухта",),
+    ("16,5 км УКПГ-15-КС Ямбургская",),
+    ("254 км Шкапово-Ишимбай",),
+    ("31 км УКПГ-15-КС Ямбургская",),
+    ("622,51 км Уренгой-Челябинск",),
+    ("0 км Оренбург-Заинск",),
+    ("0 км Выгнапуровский ГПЗ-Уренгой-Челябинск",),
+]
 
-# Эти 4 точки были в исходном наборе, но больше не являются ConnectionPoints.
-# Они должны находиться непосредственно в GtsPoints.
-RESTORED_POINTS = {
+# Эти четыре узла должны быть представлены второй строкой сверх
+# базовой строки ConnectionPoint.
+#
+# Это автономное правило экспорта: исходный Excel при запуске не читается.
+ADDITIONAL_JUNCTION_ROWS = [
     "107,3 км Торжок-Минск-Ивацевичи",
     "215 км Средняя Азия-Центр III,IV",
     "73 км ДКБМ-Калуга-Белоусово",
     "99 км Коломна-Рязань",
-}
-
-# Две точки, которые раньше ошибочно были продублированы в исходнике.
-# Никакого удаления дублей по этим именам в коде нет — здесь они только
-# для диагностического контроля наличия ровно одной строки.
-CONTROL_SINGLE_POINTS = {
-    "182 км Уренгой-Новопсков",
-    "5 км отвод на Клинцы",
-}
+]
 
 
 def clean_text(value):
@@ -100,22 +102,14 @@ def clean_text(value):
 
 
 def strip_tsg_prefix(value):
-    """Снимает только технический префикс ТСГ в начале имени."""
     text = clean_text(value)
     return re.sub(r"^\s*ТСГ\s+", "", text, flags=re.IGNORECASE).strip()
 
 
 def name_key(value):
     """
-    Устойчивый ключ имени:
-    - убирает NBSP;
-    - снимает начальный ТСГ;
-    - нормализует тире;
-    - убирает пробелы вокруг дефиса;
-    - схлопывает повторные пробелы;
-    - регистр не учитывает.
-
-    В сам Excel нормализованный ключ НЕ пишется.
+    Ключ используется только для поиска/сопоставления.
+    В выгружаемое имя изменения не вносятся, кроме снятия начального «ТСГ ».
     """
     text = strip_tsg_prefix(value)
     text = text.replace("–", "-").replace("—", "-").replace("−", "-")
@@ -124,8 +118,16 @@ def name_key(value):
     return text.casefold()
 
 
+_FIELD_MAP_CACHE = {}
+
+
 def field_map(layer):
-    return {f.name().casefold(): f.name() for f in layer.fields()}
+    cache_key = layer.id()
+    cached = _FIELD_MAP_CACHE.get(cache_key)
+    if cached is None:
+        cached = {f.name().casefold(): f.name() for f in layer.fields()}
+        _FIELD_MAP_CACHE[cache_key] = cached
+    return cached
 
 
 def attr(layer, feature, *names, default=None):
@@ -134,24 +136,17 @@ def attr(layer, feature, *names, default=None):
         actual = fmap.get(str(name).casefold())
         if actual is not None:
             value = feature[actual]
-            if value is None:
-                return default
-            return value
+            return default if value is None else value
     return default
 
 
 def uuid_key(value):
     if value is None:
         return ""
-    text = str(value).strip().lower()
-    return text.strip("{}")
+    return str(value).strip().lower().strip("{}")
 
 
 def get_layer(name):
-    """
-    Ищет слой/таблицу сначала по имени слоя.
-    Если в проекте несколько одноимённых слоёв — берётся первый валидный.
-    """
     wanted = name.casefold()
     exact = []
     fallback = []
@@ -179,16 +174,6 @@ def get_layer(name):
     return None
 
 
-def build_gts_index(gts_layer):
-    result = {}
-    for f in gts_layer.getFeatures():
-        point_id = attr(gts_layer, f, "Id", "id")
-        key = uuid_key(point_id)
-        if key:
-            result[key] = f
-    return result
-
-
 def point_data(gts_layer, feature):
     return {
         "id": attr(gts_layer, feature, "Id", "id"),
@@ -198,76 +183,39 @@ def point_data(gts_layer, feature):
     }
 
 
-def add_or_replace_row(rows_by_name, data, source_kind, diagnostics):
-    """
-    Одна строка на одно нормализованное имя.
-    Если имя уже есть — новую строку не добавляем, а фиксируем это в контроле.
-    """
-    export_name = strip_tsg_prefix(data["name"])
-    key = name_key(export_name)
-
-    if not key:
-        diagnostics.append([
-            "ОШИБКА", source_kind, "", "",
-            "Пустое имя GtsPoint — строка пропущена."
-        ])
-        return False
-
-    if key in rows_by_name:
-        diagnostics.append([
-            "ДУБЛЬ_ПОДАВЛЕН", source_kind, export_name, data["id"],
-            "Такое имя уже добавлено на лист; оставлена первая строка."
-        ])
-        return False
-
-    rows_by_name[key] = {
-        "attr_field": None,
-        "name": export_name,
-        "latitude": data["latitude"],
-        "longitude": data["longitude"],
-        "id": data["id"],
-        "source_kind": source_kind,
-    }
-    return True
-
-
 def main():
     project = QgsProject.instance()
-    if not project.mapLayers():
-        QMessageBox.critical(
-            None, "Нет слоёв",
-            "В текущем проекте QGIS нет загруженных слоёв/таблиц."
-        )
-        return
 
     gts_layer = get_layer("GtsPoints")
     connection_layer = get_layer("ConnectionPoints")
     delivery_layer = get_layer("GasDeliveryPoints")
 
-    missing_layers = []
+    missing = []
     if gts_layer is None:
-        missing_layers.append("GtsPoints")
+        missing.append("GtsPoints")
     if connection_layer is None:
-        missing_layers.append("ConnectionPoints")
+        missing.append("ConnectionPoints")
     if delivery_layer is None:
-        missing_layers.append("GasDeliveryPoints")
+        missing.append("GasDeliveryPoints")
 
-    if missing_layers:
+    if missing:
         QMessageBox.critical(
             None,
             "Не хватает таблиц",
-            "Не найдены:\n" + "\n".join(missing_layers)
+            "Не найдены:\n" + "\n".join(missing),
         )
         return
-
-    desktop = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
-    default_path = str(Path(desktop) / "Координаты_отдельных_объектов.xlsx")
 
     try:
         from qgis.utils import iface
         parent = iface.mainWindow()
     except Exception:
         parent = None
+
+    desktop = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
+    default_path = str(
+        Path(desktop) / "Координаты_отдельных_объектов_v2.xlsx"
+    )
 
     output_path, _ = QFileDialog.getSaveFileName(
         parent,
@@ -280,183 +228,245 @@ def main():
     if not output_path.lower().endswith(".xlsx"):
         output_path += ".xlsx"
 
-    gts_index = build_gts_index(gts_layer)
-
-    # Индекс всех GtsPoints по нормализованному имени без ТСГ.
+    # ---------------------------------------------------------------
+    # Индексы GtsPoints.
+    # ---------------------------------------------------------------
+    gts_by_id = {}
     gts_by_name = defaultdict(list)
-    for f in gts_layer.getFeatures():
-        data = point_data(gts_layer, f)
+
+    for feature in gts_layer.getFeatures():
+        data = point_data(gts_layer, feature)
+        id_key = uuid_key(data["id"])
+        if id_key:
+            gts_by_id[id_key] = data
+
         key = name_key(data["name"])
         if key:
             gts_by_name[key].append(data)
 
+    rows = []
     diagnostics = []
-    rows_by_name = {}
 
-    # ------------------------------------------------------------------
-    # 1. БАЗА: ConnectionPoints
-    # ------------------------------------------------------------------
+    # Для выбора второго GtsPoint у 4 дополнительных узлов.
+    used_gts_ids = set()
+
+    # ---------------------------------------------------------------
+    # 1. Все ConnectionPoints, кроме 7 исключаемых.
+    # ВАЖНО: одинаковые имена здесь НЕ схлопываются.
+    # ---------------------------------------------------------------
     excluded_keys = {name_key(x) for x in EXCLUDED_CONNECTIONS}
-    connection_count = 0
     excluded_found = set()
 
-    for f in connection_layer.getFeatures():
-        connection_count += 1
-        object_id = attr(connection_layer, f, "Id", "id")
-        point = gts_index.get(uuid_key(object_id))
+    connection_count = 0
+    base_connection_rows = 0
 
-        if point is None:
+    # Сохраняем строки CP по имени, чтобы при необходимости повторить
+    # актуальную строку для дополнительного узла.
+    exported_cp_by_name = defaultdict(list)
+
+    for feature in connection_layer.getFeatures():
+        connection_count += 1
+
+        object_id = attr(connection_layer, feature, "Id", "id")
+        data = gts_by_id.get(uuid_key(object_id))
+
+        if data is None:
             diagnostics.append([
-                "ОШИБКА", "ConnectionPoint", "", object_id,
-                "ConnectionPoints.Id не найден в GtsPoints."
+                "ОШИБКА",
+                "ConnectionPoint",
+                "",
+                clean_text(object_id),
+                "ConnectionPoints.Id не найден в GtsPoints.",
             ])
             continue
 
-        data = point_data(gts_layer, point)
         key = name_key(data["name"])
 
         if key in excluded_keys:
             excluded_found.add(key)
             diagnostics.append([
-                "ИСКЛЮЧЕН", "ConnectionPoint",
-                strip_tsg_prefix(data["name"]), data["id"],
-                "Новая точка; по согласованному правилу не выгружается."
+                "ИСКЛЮЧЕН",
+                "ConnectionPoint",
+                data["name"],
+                clean_text(data["id"]),
+                "Новая точка; по согласованному правилу не выгружается.",
             ])
             continue
 
-        add_or_replace_row(
-            rows_by_name, data, "ConnectionPoint", diagnostics
-        )
+        export_row = {
+            "attr_field": None,
+            "name": data["name"],
+            "latitude": data["latitude"],
+            "longitude": data["longitude"],
+            "id": data["id"],
+            "kind": "ConnectionPoint",
+        }
+        rows.append(export_row)
+        exported_cp_by_name[key].append(export_row)
+        used_gts_ids.add(uuid_key(data["id"]))
+        base_connection_rows += 1
 
-    # ------------------------------------------------------------------
-    # 2. 20 специальных ТСГ из GasDeliveryPoints
-    # ------------------------------------------------------------------
-    wanted_tsg = {name_key(x): x for x in TSG_POINTS}
-    found_tsg = set()
+    # ---------------------------------------------------------------
+    # 2. Добавляем 20 ТСГ.
+    # Каждая позиция TSG_SLOTS должна дать ровно одну строку.
+    # ---------------------------------------------------------------
+    delivery_candidates = []
 
-    for f in delivery_layer.getFeatures():
-        object_id = attr(delivery_layer, f, "Id", "id")
-        point = gts_index.get(uuid_key(object_id))
-        if point is None:
-            continue
+    for feature in delivery_layer.getFeatures():
+        object_id = attr(delivery_layer, feature, "Id", "id")
+        data = gts_by_id.get(uuid_key(object_id))
+        if data is not None:
+            delivery_candidates.append(data)
 
-        data = point_data(gts_layer, point)
-        key = name_key(data["name"])
+    tsg_added = 0
+    tsg_missing = []
 
-        if key not in wanted_tsg:
-            continue
+    for slot_no, aliases in enumerate(TSG_SLOTS, start=1):
+        alias_keys = {name_key(x) for x in aliases}
 
-        found_tsg.add(key)
+        matches = [
+            data for data in delivery_candidates
+            if name_key(data["name"]) in alias_keys
+        ]
 
-        if key in rows_by_name:
+        # Резерв: если связь GasDeliveryPoints почему-то не прочиталась,
+        # ищем тот же объект непосредственно в GtsPoints.
+        if not matches:
+            seen_ids = set()
+            for alias in aliases:
+                for data in gts_by_name.get(name_key(alias), []):
+                    key_id = uuid_key(data["id"])
+                    if key_id not in seen_ids:
+                        matches.append(data)
+                        seen_ids.add(key_id)
+
+        if not matches:
+            tsg_missing.append(aliases[0])
             diagnostics.append([
-                "УЖЕ_ЕСТЬ", "GasDeliveryPoint",
-                strip_tsg_prefix(data["name"]), data["id"],
-                "Нужная ТСГ уже присутствует среди ConnectionPoints; вторая строка не создаётся."
+                "НЕ_НАЙДЕН",
+                "ТСГ",
+                " / ".join(aliases),
+                "",
+                "Не найден ни через GasDeliveryPoints, ни напрямую в GtsPoints.",
             ])
             continue
 
-        add_or_replace_row(
-            rows_by_name, data, "GasDeliveryPoint/ТСГ", diagnostics
-        )
-
-    # Если какой-либо из 20 не нашёлся через GasDeliveryPoints,
-    # делаем резервный поиск напрямую в GtsPoints.
-    for key, expected_name in wanted_tsg.items():
-        if key in found_tsg:
-            continue
-
-        candidates = gts_by_name.get(key, [])
-        if candidates:
-            data = candidates[0]
-            found_tsg.add(key)
-            if key not in rows_by_name:
-                add_or_replace_row(
-                    rows_by_name, data, "GtsPoint/ТСГ резерв", diagnostics
-                )
+        # Если вдруг найдено несколько вариантов, выбираем первый,
+        # но фиксируем это в контроле.
+        data = matches[0]
+        if len(matches) > 1:
             diagnostics.append([
-                "НАЙДЕН_РЕЗЕРВНО", "ТСГ",
-                strip_tsg_prefix(data["name"]), data["id"],
-                "Не найден среди GasDeliveryPoints, но найден в GtsPoints."
-            ])
-        else:
-            diagnostics.append([
-                "НЕ_НАЙДЕН", "ТСГ", expected_name, "",
-                "Нет ни в GasDeliveryPoints, ни в GtsPoints по нормализованному имени."
+                "НЕСКОЛЬКО_КАНДИДАТОВ",
+                "ТСГ",
+                strip_tsg_prefix(data["name"]),
+                clean_text(data["id"]),
+                f"Для позиции №{slot_no} найдено кандидатов: {len(matches)}; "
+                "выбран первый.",
             ])
 
-    # ------------------------------------------------------------------
-    # 3. 4 старые точки, которые больше не являются ConnectionPoints
-    # ------------------------------------------------------------------
-    restored_found = set()
+        rows.append({
+            "attr_field": None,
+            "name": strip_tsg_prefix(data["name"]),
+            "latitude": data["latitude"],
+            "longitude": data["longitude"],
+            "id": data["id"],
+            "kind": "GasDeliveryPoint/ТСГ",
+        })
+        used_gts_ids.add(uuid_key(data["id"]))
+        tsg_added += 1
 
-    for expected_name in sorted(RESTORED_POINTS):
+    # ---------------------------------------------------------------
+    # 3. Четыре дополнительные строки узлов.
+    #
+    # Сначала стараемся взять ДРУГОЙ GtsPoint с тем же именем, который
+    # ещё не был выгружен. Это особенно важно для 73 км
+    # ДКБМ-Калуга-Белоусово, где две записи могут иметь разные координаты.
+    #
+    # Если второго GtsPoint в БД уже нет, повторяем актуальную строку CP.
+    # ---------------------------------------------------------------
+    junction_added = 0
+
+    for expected_name in ADDITIONAL_JUNCTION_ROWS:
         key = name_key(expected_name)
-
-        if key in rows_by_name:
-            restored_found.add(key)
-            diagnostics.append([
-                "УЖЕ_ЕСТЬ", "Восстанавливаемая точка",
-                expected_name, rows_by_name[key]["id"],
-                "Точка уже попала в выгрузку из ConnectionPoints."
-            ])
-            continue
-
         candidates = gts_by_name.get(key, [])
-        if not candidates:
+
+        unused = [
+            data for data in candidates
+            if uuid_key(data["id"]) not in used_gts_ids
+        ]
+
+        if unused:
+            data = unused[0]
+            rows.append({
+                "attr_field": None,
+                "name": data["name"],
+                "latitude": data["latitude"],
+                "longitude": data["longitude"],
+                "id": data["id"],
+                "kind": "Дополнительный GtsPoint",
+            })
+            used_gts_ids.add(uuid_key(data["id"]))
+            junction_added += 1
+
             diagnostics.append([
-                "НЕ_НАЙДЕН", "Восстанавливаемая точка",
-                expected_name, "",
-                "Точки нет в текущем GtsPoints. Автономно восстановить невозможно."
+                "ДОБАВЛЕН",
+                "Дополнительный узел",
+                data["name"],
+                clean_text(data["id"]),
+                "Найден отдельный GtsPoint с тем же именем.",
             ])
             continue
 
-        data = candidates[0]
-        restored_found.add(key)
-        add_or_replace_row(
-            rows_by_name, data, "GtsPoint/восстановленная", diagnostics
-        )
+        # Если отдельного объекта уже нет, повторяем текущую актуальную
+        # строку ConnectionPoint. Это не чтение исходного Excel.
+        existing = exported_cp_by_name.get(key, [])
+        if existing:
+            base = existing[0]
+            rows.append({
+                "attr_field": None,
+                "name": base["name"],
+                "latitude": base["latitude"],
+                "longitude": base["longitude"],
+                "id": base["id"],
+                "kind": "Дополнительная строка узла",
+            })
+            junction_added += 1
 
-    # ------------------------------------------------------------------
-    # 4. Контроль двух исходных ошибочных дублей:
-    #    в новом листе должна быть одна строка на имя.
-    # ------------------------------------------------------------------
-    for expected_name in sorted(CONTROL_SINGLE_POINTS):
-        key = name_key(expected_name)
-        if key in rows_by_name:
             diagnostics.append([
-                "OK", "Контроль одиночной строки",
-                expected_name, rows_by_name[key]["id"],
-                "В итоговой выгрузке присутствует один раз."
+                "ПОВТОРЕН",
+                "Дополнительный узел",
+                base["name"],
+                clean_text(base["id"]),
+                "Отдельного второго GtsPoint нет; повторена актуальная "
+                "строка ConnectionPoint.",
             ])
-        else:
-            # Дополнительный резерв: точка могла перестать быть CP, но остаться GtsPoint.
-            candidates = gts_by_name.get(key, [])
-            if candidates:
-                data = candidates[0]
-                add_or_replace_row(
-                    rows_by_name, data, "GtsPoint/контрольный резерв", diagnostics
-                )
-                diagnostics.append([
-                    "ДОБАВЛЕН_РЕЗЕРВНО", "Контроль одиночной строки",
-                    expected_name, data["id"],
-                    "Не попала как ConnectionPoint, но найдена в GtsPoints."
-                ])
-            else:
-                diagnostics.append([
-                    "НЕ_НАЙДЕН", "Контроль одиночной строки",
-                    expected_name, "",
-                    "Не найдена даже в GtsPoints."
-                ])
+            continue
 
-    # ------------------------------------------------------------------
-    # 5. Excel
-    # ------------------------------------------------------------------
-    rows = sorted(
-        rows_by_name.values(),
-        key=lambda x: name_key(x["name"])
+        diagnostics.append([
+            "НЕ_НАЙДЕН",
+            "Дополнительный узел",
+            expected_name,
+            "",
+            "Нет ни отдельного GtsPoint, ни базовой строки ConnectionPoint.",
+        ])
+
+    # ---------------------------------------------------------------
+    # 4. Сортировка.
+    # Не удаляем строки с одинаковыми именами.
+    # Python sort стабилен, поэтому одинаковые имена сохраняются обе.
+    # ---------------------------------------------------------------
+    rows.sort(
+        key=lambda row: (
+            name_key(row["name"]),
+            str(row["latitude"] if row["latitude"] is not None else ""),
+            str(row["longitude"] if row["longitude"] is not None else ""),
+            row["kind"],
+        )
     )
 
+    # ---------------------------------------------------------------
+    # 5. Excel.
+    # ---------------------------------------------------------------
     wb = Workbook()
     ws = wb.active
     ws.title = "Координаты отдельных объектов"
@@ -477,19 +487,21 @@ def main():
             row["longitude"],
         ])
 
-    # Контроль
     ctrl = wb.create_sheet("Контроль")
     ctrl.append(["Показатель", "Значение"])
     ctrl.append(["ConnectionPoints в БД", connection_count])
     ctrl.append(["Ожидалось ConnectionPoints", EXPECTED_CONNECTION_COUNT])
+    ctrl.append(["ConnectionPoints после исключения 7", base_connection_rows])
     ctrl.append(["Найдено исключаемых из 7", len(excluded_found)])
-    ctrl.append(["Найдено специальных ТСГ из 20", len(found_tsg)])
-    ctrl.append(["Найдено восстанавливаемых точек из 4", len(restored_found)])
-    ctrl.append(["Итоговых уникальных строк", len(rows)])
+    ctrl.append(["Добавлено специальных ТСГ", tsg_added])
+    ctrl.append(["Ожидалось специальных ТСГ", len(TSG_SLOTS)])
+    ctrl.append(["Добавлено дополнительных узлов", junction_added])
+    ctrl.append(["Ожидалось дополнительных узлов", len(ADDITIONAL_JUNCTION_ROWS)])
+    ctrl.append(["Итоговых строк", len(rows)])
     ctrl.append(["Ожидалось итоговых строк", EXPECTED_FINAL_COUNT])
     ctrl.append([
         "Статус количества",
-        "OK" if len(rows) == EXPECTED_FINAL_COUNT else "ПРОВЕРИТЬ"
+        "OK" if len(rows) == EXPECTED_FINAL_COUNT else "ПРОВЕРИТЬ",
     ])
     ctrl.append([])
     ctrl.append(["Статус", "Тип", "Наименование", "Id", "Комментарий"])
@@ -497,7 +509,6 @@ def main():
     for item in diagnostics:
         ctrl.append(item)
 
-    # Небольшое оформление.
     header_fill = PatternFill("solid", fgColor="1F4E78")
     header_font = Font(color="FFFFFF", bold=True)
     thin = Side(style="thin", color="D9E1F2")
@@ -507,13 +518,13 @@ def main():
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        for row in sheet.iter_rows():
-            for cell in row:
+        for row_cells in sheet.iter_rows():
+            for cell in row_cells:
                 cell.border = Border(bottom=thin)
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-    # Вторая шапка на Контроле.
-    for cell in ctrl[11]:
+    # Заголовок подробного контроля.
+    for cell in ctrl[14]:
         cell.fill = header_fill
         cell.font = header_font
 
@@ -525,39 +536,38 @@ def main():
     ws.column_dimensions["C"].width = 18
     ws.column_dimensions["D"].width = 18
 
-    ctrl.column_dimensions["A"].width = 24
-    ctrl.column_dimensions["B"].width = 27
-    ctrl.column_dimensions["C"].width = 58
+    ctrl.column_dimensions["A"].width = 30
+    ctrl.column_dimensions["B"].width = 28
+    ctrl.column_dimensions["C"].width = 62
     ctrl.column_dimensions["D"].width = 40
-    ctrl.column_dimensions["E"].width = 70
+    ctrl.column_dimensions["E"].width = 80
 
     wb.save(output_path)
 
-    missing_tsg_count = len(wanted_tsg) - len(found_tsg)
-    missing_restored_count = len(RESTORED_POINTS) - len(restored_found)
-
-    message = (
+    msg = (
         f"Готово.\n\n"
         f"ConnectionPoints в БД: {connection_count}\n"
-        f"Исключено новых точек: {len(excluded_found)} из 7\n"
-        f"Найдено специальных ТСГ: {len(found_tsg)} из 20\n"
-        f"Найдено старых точек: {len(restored_found)} из 4\n"
-        f"Итог: {len(rows)} строк (ожидалось {EXPECTED_FINAL_COUNT})\n\n"
-        f"Не найдено ТСГ: {missing_tsg_count}\n"
-        f"Не найдено старых точек: {missing_restored_count}\n\n"
+        f"После исключения 7: {base_connection_rows}\n"
+        f"Добавлено ТСГ: {tsg_added} из {len(TSG_SLOTS)}\n"
+        f"Добавлено дополнительных узлов: "
+        f"{junction_added} из {len(ADDITIONAL_JUNCTION_ROWS)}\n"
+        f"Итог: {len(rows)} строк "
+        f"(ожидалось {EXPECTED_FINAL_COUNT})\n\n"
         f"Файл:\n{output_path}"
     )
 
+    if tsg_missing:
+        msg += "\n\nНе найдены ТСГ:\n" + "\n".join(tsg_missing)
+
     if len(rows) == EXPECTED_FINAL_COUNT:
-        QMessageBox.information(None, "Выгрузка завершена", message)
+        QMessageBox.information(None, "Выгрузка завершена", msg)
     else:
         QMessageBox.warning(
             None,
             "Выгрузка завершена с контролем",
-            message + "\n\nСмотрите лист «Контроль»."
+            msg + "\n\nСмотрите лист «Контроль».",
         )
 
 
-# В редакторе Python QGIS файл может запускаться не с __name__ == "__main__",
-# поэтому запускаем функцию напрямую.
+# Для редактора Python QGIS запускаем напрямую.
 main()
