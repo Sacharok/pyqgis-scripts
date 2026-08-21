@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Самостоятельная выгрузка «Координаты отдельных объектов» — v2.
+Самостоятельная выгрузка «Координаты отдельных объектов» — v2.1.
 
 Источник: только текущие таблицы/слои QGIS/PostgreSQL.
 Исходный Excel НЕ используется.
@@ -214,7 +214,7 @@ def main():
 
     desktop = QStandardPaths.writableLocation(QStandardPaths.DesktopLocation)
     default_path = str(
-        Path(desktop) / "Координаты_отдельных_объектов_v2.xlsx"
+        Path(desktop) / "Координаты_отдельных_объектов_v2_1.xlsx"
     )
 
     output_path, _ = QFileDialog.getSaveFileName(
@@ -295,7 +295,7 @@ def main():
 
         export_row = {
             "attr_field": None,
-            "name": data["name"],
+            "name": strip_tsg_prefix(data["name"]),
             "latitude": data["latitude"],
             "longitude": data["longitude"],
             "id": data["id"],
@@ -399,7 +399,7 @@ def main():
             data = unused[0]
             rows.append({
                 "attr_field": None,
-                "name": data["name"],
+                "name": strip_tsg_prefix(data["name"]),
                 "latitude": data["latitude"],
                 "longitude": data["longitude"],
                 "id": data["id"],
