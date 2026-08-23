@@ -1,0 +1,933 @@
+/* ============================================================
+   02_POINT_PREPARE_PUBLISH
+
+   Подготовка точечных объектов трубопроводов
+   к загрузке в neo_nsi.
+
+   ЗАПУСКАТЬ В ЛОКАЛЬНОЙ БД.
+
+   НИЧЕГО В neo_nsi НЕ ЗАПИСЫВАЕТ.
+   ============================================================ */
+
+
+/* ============================================================
+   1. НАСТРОЙКА ПОДКЛЮЧЕНИЯ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_publish_config;
+
+CREATE TEMP TABLE tmp_point_publish_config
+(
+    neo_nsi_conn text NOT NULL
+);
+
+INSERT INTO tmp_point_publish_config
+VALUES
+(
+    'host=ХОСТ port=5432 dbname=neo_nsi user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ'
+);
+
+
+/* ============================================================
+   2. БЛОКИРУЕМ ЭТАП, ЕСЛИ 01 ЕЩЁ НЕ ЗАВЕРШЁН
+   ============================================================ */
+
+DO $$
+DECLARE
+    v_count bigint;
+BEGIN
+
+    SELECT count(*)
+    INTO v_count
+    FROM normalization."OT_Truboprovod_P_issues"
+    WHERE severity IN ('ERROR', 'REVIEW');
+
+    IF v_count > 0 THEN
+
+        RAISE EXCEPTION
+            'Публикация пока запрещена. После 01 остаётся % ERROR/REVIEW.',
+            v_count;
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   3. ЛОКАЛЬНЫЕ ТАБЛИЦЫ ПОДГОТОВКИ
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS
+normalization."OT_Truboprovod_P_nsi_object"
+(
+    id uuid PRIMARY KEY,
+
+    naim varchar(255),
+
+    funk_nazn uuid,
+
+    teh_hrkt text,
+
+    primechan text
+);
+
+COMMENT ON TABLE
+normalization."OT_Truboprovod_P_nsi_object"
+IS
+'Подготовленные записи точек для CompositionOfLinearObject в neo_nsi.';
+
+
+CREATE TABLE IF NOT EXISTS
+normalization."OT_Truboprovod_P_nsi_pikets"
+(
+    id uuid NOT NULL,
+
+    rasp_piket varchar(255) NOT NULL,
+
+    PRIMARY KEY
+    (
+        id,
+        rasp_piket
+    )
+);
+
+COMMENT ON TABLE
+normalization."OT_Truboprovod_P_nsi_pikets"
+IS
+'Подготовленные связи точек с пикетами для CompositionOfLinerObjectPikets.';
+
+
+CREATE TABLE IF NOT EXISTS
+normalization."OT_Truboprovod_P_nsi_pipelines"
+(
+    id uuid NOT NULL,
+
+    pipeline_id uuid NOT NULL,
+
+    PRIMARY KEY
+    (
+        id,
+        pipeline_id
+    )
+);
+
+COMMENT ON TABLE
+normalization."OT_Truboprovod_P_nsi_pipelines"
+IS
+'Подготовленные связи точек с Pipelines для CompositionOfLinearObjectPipelines.';
+
+
+CREATE TABLE IF NOT EXISTS
+normalization."OT_Truboprovod_P_publish_issues"
+(
+    issue_id bigserial PRIMARY KEY,
+
+    severity varchar(20) NOT NULL,
+
+    issue_type varchar(100) NOT NULL,
+
+    object_id uuid,
+
+    field_name varchar(100),
+
+    source_value text,
+
+    details text,
+
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE
+normalization."OT_Truboprovod_P_publish_issues"
+IS
+'Контрольные ошибки подготовки точек перед фактической записью в neo_nsi/BGD.';
+
+
+TRUNCATE TABLE
+normalization."OT_Truboprovod_P_nsi_object";
+
+TRUNCATE TABLE
+normalization."OT_Truboprovod_P_nsi_pikets";
+
+TRUNCATE TABLE
+normalization."OT_Truboprovod_P_nsi_pipelines";
+
+TRUNCATE TABLE
+normalization."OT_Truboprovod_P_publish_issues"
+RESTART IDENTITY;
+
+
+/* ============================================================
+   4. ПОДКЛЮЧЕНИЕ К neo_nsi
+   ============================================================ */
+
+DO $$
+BEGIN
+
+    IF 'point_publish_nsi'
+       =
+       ANY
+       (
+           COALESCE(
+               dblink_get_connections(),
+               ARRAY[]::text[]
+           )
+       )
+    THEN
+
+        PERFORM dblink_disconnect(
+            'point_publish_nsi'
+        );
+
+    END IF;
+
+END $$;
+
+
+SELECT dblink_connect
+(
+    'point_publish_nsi',
+
+    (
+        SELECT neo_nsi_conn
+        FROM tmp_point_publish_config
+        LIMIT 1
+    )
+);
+
+
+/* ============================================================
+   5. КОПИРУЕМ НУЖНЫЕ СПРАВОЧНИКИ ЛОКАЛЬНО
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_publish_purposes;
+
+CREATE TEMP TABLE tmp_publish_purposes AS
+
+SELECT *
+FROM dblink
+(
+    'point_publish_nsi',
+
+    '
+    SELECT
+        id,
+        naim::text
+    FROM public."PurposesOfPipelineNetworkObjects"
+    '
+)
+AS x
+(
+    id uuid,
+    naim text
+);
+
+
+DROP TABLE IF EXISTS tmp_publish_pipelines;
+
+CREATE TEMP TABLE tmp_publish_pipelines AS
+
+SELECT *
+FROM dblink
+(
+    'point_publish_nsi',
+
+    '
+    SELECT
+        id,
+        naim_tr::text
+    FROM public."Pipelines"
+    WHERE naim_tr IS NOT NULL
+    '
+)
+AS x
+(
+    id uuid,
+    naim_tr text
+);
+
+
+/* ============================================================
+   6. ТЕКУЩЕЕ СОСТОЯНИЕ CompositionOfLinearObject
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_existing_composition;
+
+CREATE TEMP TABLE tmp_existing_composition AS
+
+SELECT *
+FROM dblink
+(
+    'point_publish_nsi',
+
+    '
+    SELECT
+        id,
+        naim::text,
+        funk_nazn,
+        teh_hrkt,
+        primechan
+    FROM public."CompositionOfLinearObject"
+    '
+)
+
+AS x
+(
+    id uuid,
+    naim text,
+    funk_nazn uuid,
+    teh_hrkt text,
+    primechan text
+);
+
+
+/* ============================================================
+   7. ТЕКУЩИЕ ПИКЕТЫ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_existing_pikets;
+
+CREATE TEMP TABLE tmp_existing_pikets AS
+
+SELECT *
+FROM dblink
+(
+    'point_publish_nsi',
+
+    '
+    SELECT
+        id,
+        rasp_piket::text
+    FROM public."CompositionOfLinerObjectPikets"
+    '
+)
+
+AS x
+(
+    id uuid,
+    rasp_piket text
+);
+
+
+/* ============================================================
+   8. ТЕКУЩИЕ СВЯЗИ PIPELINES
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_existing_pipeline_links;
+
+CREATE TEMP TABLE tmp_existing_pipeline_links AS
+
+SELECT *
+FROM dblink
+(
+    'point_publish_nsi',
+
+    '
+    SELECT
+        id,
+        naim_tr
+    FROM public."CompositionOfLinearObjectPipelines"
+    '
+)
+
+AS x
+(
+    id uuid,
+    naim_tr uuid
+);
+
+
+SELECT dblink_disconnect(
+    'point_publish_nsi'
+);
+
+
+/* ============================================================
+   9. РАЗРЕШАЕМ funk_nazn -> UUID
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_publish_purpose_match;
+
+CREATE TEMP TABLE tmp_publish_purpose_match AS
+
+SELECT
+    r.id,
+
+    r.funk_nazn AS source_value,
+
+    m.match_count,
+
+    m.purpose_id
+
+FROM normalization."OT_Truboprovod_P_ready" r
+
+LEFT JOIN LATERAL
+(
+    SELECT
+        count(*) AS match_count,
+
+        min(p.id::text)::uuid
+            AS purpose_id
+
+    FROM tmp_publish_purposes p
+
+    WHERE normalization.text_key(p.naim)
+          =
+          normalization.text_key(r.funk_nazn)
+
+) m ON true;
+
+
+/* Не найдено */
+
+INSERT INTO normalization."OT_Truboprovod_P_publish_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'ERROR',
+    'PURPOSE_NOT_FOUND',
+    id,
+    'funk_nazn',
+    source_value,
+    'Значение отсутствует в PurposesOfPipelineNetworkObjects'
+
+FROM tmp_publish_purpose_match
+
+WHERE source_value IS NOT NULL
+  AND match_count = 0;
+
+
+/* Неоднозначное значение */
+
+INSERT INTO normalization."OT_Truboprovod_P_publish_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'ERROR',
+    'PURPOSE_AMBIGUOUS',
+    id,
+    'funk_nazn',
+    source_value,
+    'В PurposesOfPipelineNetworkObjects найдено совпадений: '
+        || match_count
+
+FROM tmp_publish_purpose_match
+
+WHERE source_value IS NOT NULL
+  AND match_count > 1;
+
+
+/* ============================================================
+   10. ОСНОВНАЯ CompositionOfLinearObject
+   ============================================================ */
+
+INSERT INTO normalization."OT_Truboprovod_P_nsi_object"
+(
+    id,
+    naim,
+    funk_nazn,
+    teh_hrkt,
+    primechan
+)
+
+SELECT
+    r.id,
+    r.naim,
+
+    CASE
+        WHEN r.funk_nazn IS NULL
+            THEN NULL
+        WHEN p.match_count = 1
+            THEN p.purpose_id
+        ELSE NULL
+    END,
+
+    r.teh_hrkt,
+    r.primechan
+
+FROM normalization."OT_Truboprovod_P_ready" r
+
+LEFT JOIN tmp_publish_purpose_match p
+    ON p.id = r.id;
+
+
+/* ============================================================
+   11. РАЗБИРАЕМ ПИКЕТЫ
+
+   Значение не обязано быть ПК...
+   Здесь просто разбивается строка по ";",
+   как это делал старый этап.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_publish_pikets;
+
+CREATE TEMP TABLE tmp_publish_pikets AS
+
+SELECT DISTINCT
+    r.id,
+
+    btrim(x.value)
+        AS rasp_piket
+
+FROM normalization."OT_Truboprovod_P_ready" r
+
+CROSS JOIN LATERAL
+    unnest(
+        string_to_array(
+            r.rasp_piket,
+            ';'
+        )
+    )
+AS x(value)
+
+WHERE r.rasp_piket IS NOT NULL
+
+  AND NULLIF(
+        btrim(x.value),
+        ''
+      ) IS NOT NULL;
+
+
+/* В neo_nsi rasp_piket = varchar(255) */
+
+INSERT INTO normalization."OT_Truboprovod_P_publish_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'ERROR',
+    'PIKET_TOO_LONG',
+    id,
+    'rasp_piket',
+    rasp_piket,
+    'Длина значения больше 255 символов: '
+        || length(rasp_piket)
+
+FROM tmp_publish_pikets
+
+WHERE length(rasp_piket) > 255;
+
+
+INSERT INTO normalization."OT_Truboprovod_P_nsi_pikets"
+(
+    id,
+    rasp_piket
+)
+
+SELECT
+    id,
+    rasp_piket::varchar(255)
+
+FROM tmp_publish_pikets
+
+WHERE length(rasp_piket) <= 255;
+
+
+/* ============================================================
+   12. РАЗБИРАЕМ naim_tr
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_publish_pipeline_parts;
+
+CREATE TEMP TABLE tmp_publish_pipeline_parts AS
+
+SELECT
+    r.id,
+
+    btrim(x.value)
+        AS source_value,
+
+    normalization.text_key(
+        btrim(x.value)
+    ) AS source_key,
+
+    normalization.pipeline_match_key(
+        btrim(x.value)
+    ) AS technical_key,
+
+    normalization.numeric_signature(
+        btrim(x.value)
+    ) AS numbers
+
+FROM normalization."OT_Truboprovod_P_ready" r
+
+CROSS JOIN LATERAL
+    unnest(
+        string_to_array(
+            r.naim_tr,
+            ';'
+        )
+    )
+AS x(value)
+
+WHERE r.naim_tr IS NOT NULL
+
+  AND NULLIF(
+        btrim(x.value),
+        ''
+      ) IS NOT NULL;
+
+
+/* ============================================================
+   13. СОПОСТАВЛЯЕМ С Pipelines
+
+   1. сначала обычное точное;
+   2. затем технически точное;
+   3. если найдено несколько одинаковых —
+      оставляем старое согласованное поведение:
+      берём минимальный UUID.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_publish_pipeline_match;
+
+CREATE TEMP TABLE tmp_publish_pipeline_match AS
+
+SELECT
+    p.id,
+
+    p.source_value,
+
+    s.strict_count,
+
+    t.technical_count,
+
+    CASE
+
+        WHEN s.strict_count > 0
+            THEN s.pipeline_id
+
+        WHEN t.technical_count > 0
+            THEN t.pipeline_id
+
+        ELSE NULL
+
+    END AS pipeline_id,
+
+    CASE
+
+        WHEN s.strict_count = 1
+            THEN 'EXACT'
+
+        WHEN s.strict_count > 1
+            THEN 'EXACT_DUPLICATE'
+
+        WHEN t.technical_count = 1
+            THEN 'TECHNICAL_EXACT'
+
+        WHEN t.technical_count > 1
+            THEN 'TECHNICAL_EXACT_DUPLICATE'
+
+        ELSE 'NOT_FOUND'
+
+    END AS resolution_method
+
+FROM tmp_publish_pipeline_parts p
+
+LEFT JOIN LATERAL
+(
+    SELECT
+        count(*) AS strict_count,
+
+        min(n.id::text)::uuid
+            AS pipeline_id
+
+    FROM tmp_publish_pipelines n
+
+    WHERE normalization.text_key(n.naim_tr)
+          =
+          p.source_key
+
+) s ON true
+
+LEFT JOIN LATERAL
+(
+    SELECT
+        count(*) AS technical_count,
+
+        min(n.id::text)::uuid
+            AS pipeline_id
+
+    FROM tmp_publish_pipelines n
+
+    WHERE normalization.pipeline_match_key(n.naim_tr)
+          =
+          p.technical_key
+
+      AND
+      (
+          p.numbers IS NULL
+
+          OR
+
+          normalization.numeric_signature(n.naim_tr)
+          =
+          p.numbers
+      )
+
+) t ON true;
+
+
+/* Ничего не нашли */
+
+INSERT INTO normalization."OT_Truboprovod_P_publish_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'ERROR',
+    'PIPELINE_NOT_FOUND',
+    id,
+    'naim_tr',
+    source_value,
+    'На этапе публикации Pipeline снова не найден'
+
+FROM tmp_publish_pipeline_match
+
+WHERE pipeline_id IS NULL;
+
+
+/* Дубликаты не блокируют */
+
+INSERT INTO normalization."OT_Truboprovod_P_publish_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'WARNING',
+    'PIPELINE_DUPLICATE',
+    id,
+    'naim_tr',
+    source_value,
+
+    'Найдено несколько одинаковых Pipelines. Выбран один UUID.'
+
+FROM tmp_publish_pipeline_match
+
+WHERE resolution_method IN
+(
+    'EXACT_DUPLICATE',
+    'TECHNICAL_EXACT_DUPLICATE'
+);
+
+
+INSERT INTO normalization."OT_Truboprovod_P_nsi_pipelines"
+(
+    id,
+    pipeline_id
+)
+
+SELECT DISTINCT
+    id,
+    pipeline_id
+
+FROM tmp_publish_pipeline_match
+
+WHERE pipeline_id IS NOT NULL;
+
+
+/* ============================================================
+   14. ИТОГОВЫЕ ОШИБКИ ЭТАПА 02
+   ============================================================ */
+
+SELECT
+    severity,
+    issue_type,
+    count(*) AS issues_count
+
+FROM normalization."OT_Truboprovod_P_publish_issues"
+
+GROUP BY
+    severity,
+    issue_type
+
+ORDER BY
+    severity,
+    issue_type;
+
+
+/* ============================================================
+   15. ЧТО ПРОИЗОЙДЁТ С CompositionOfLinearObject
+   ============================================================ */
+
+SELECT
+    operation,
+    count(*) AS objects_count
+
+FROM
+(
+    SELECT
+
+        n.id,
+
+        CASE
+
+            WHEN e.id IS NULL
+                THEN 'INSERT'
+
+            WHEN
+                   e.naim
+                   IS DISTINCT FROM n.naim
+
+                OR e.funk_nazn
+                   IS DISTINCT FROM n.funk_nazn
+
+                OR e.teh_hrkt
+                   IS DISTINCT FROM n.teh_hrkt
+
+                OR e.primechan
+                   IS DISTINCT FROM n.primechan
+
+                THEN 'UPDATE'
+
+            ELSE 'NO_CHANGE'
+
+        END AS operation
+
+    FROM normalization."OT_Truboprovod_P_nsi_object" n
+
+    LEFT JOIN tmp_existing_composition e
+        ON e.id = n.id
+
+) q
+
+GROUP BY operation
+
+ORDER BY operation;
+
+
+/* ============================================================
+   16. ЧТО ПРОИЗОЙДЁТ С ПИКЕТАМИ
+   ============================================================ */
+
+SELECT
+    (
+        SELECT count(*)
+        FROM
+        (
+            SELECT id, rasp_piket
+            FROM normalization."OT_Truboprovod_P_nsi_pikets"
+
+            EXCEPT
+
+            SELECT id, rasp_piket
+            FROM tmp_existing_pikets
+        ) q
+    ) AS pikets_to_insert,
+
+    (
+        SELECT count(*)
+        FROM
+        (
+            SELECT e.id, e.rasp_piket
+            FROM tmp_existing_pikets e
+
+            JOIN normalization."OT_Truboprovod_P_ready" r
+                ON r.id = e.id
+
+            EXCEPT
+
+            SELECT id, rasp_piket
+            FROM normalization."OT_Truboprovod_P_nsi_pikets"
+        ) q
+    ) AS pikets_to_delete;
+
+
+/* ============================================================
+   17. ЧТО ПРОИЗОЙДЁТ СО СВЯЗЯМИ PIPELINES
+   ============================================================ */
+
+SELECT
+    (
+        SELECT count(*)
+        FROM
+        (
+            SELECT id, pipeline_id
+            FROM normalization."OT_Truboprovod_P_nsi_pipelines"
+
+            EXCEPT
+
+            SELECT id, naim_tr
+            FROM tmp_existing_pipeline_links
+        ) q
+    ) AS links_to_insert,
+
+    (
+        SELECT count(*)
+        FROM
+        (
+            SELECT e.id, e.naim_tr
+            FROM tmp_existing_pipeline_links e
+
+            JOIN normalization."OT_Truboprovod_P_ready" r
+                ON r.id = e.id
+
+            EXCEPT
+
+            SELECT id, pipeline_id
+            FROM normalization."OT_Truboprovod_P_nsi_pipelines"
+        ) q
+    ) AS links_to_delete;
+
+
+/* ============================================================
+   18. ОБЩЕЕ КОЛИЧЕСТВО ПОДГОТОВЛЕННЫХ ДАННЫХ
+   ============================================================ */
+
+SELECT
+    (
+        SELECT count(*)
+        FROM normalization."OT_Truboprovod_P_ready"
+    ) AS ready_objects,
+
+    (
+        SELECT count(*)
+        FROM normalization."OT_Truboprovod_P_nsi_object"
+    ) AS nsi_objects,
+
+    (
+        SELECT count(*)
+        FROM normalization."OT_Truboprovod_P_nsi_pikets"
+    ) AS nsi_pikets,
+
+    (
+        SELECT count(*)
+        FROM normalization."OT_Truboprovod_P_nsi_pipelines"
+    ) AS nsi_pipeline_links,
+
+    (
+        SELECT count(*)
+        FROM normalization."OT_Truboprovod_P_publish_issues"
+        WHERE severity = 'ERROR'
+    ) AS publish_errors;
