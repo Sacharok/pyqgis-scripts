@@ -1,0 +1,1426 @@
+drop table public."OT_Truboprovod_A_klass_prav";
+CREATE TABLE public."OT_Truboprovod_A_klass_prav" (
+	id uuid NOT null default uuid_generate_v4(),
+	project_id uuid null,
+	geom public.geometry(multipolygon, 3857) NULL,
+	class_code varchar(10) null,
+	class_name varchar(100) null,
+	naim_tr varchar(255) NULL,
+	naim varchar(255) NULL,
+	rasp_piket varchar(255) NULL,
+	funk_nazn varchar(255) NULL,
+	teh_hrkt text NULL,
+	primechan text NULL,
+	dzo varchar(8) null,
+	CONSTRAINT "OT_Truboprovod_A_klass_prav_pkey" PRIMARY KEY (id)
+);
+-- Динамически создаём столбец ДО/ДЗО (на всякий) и заполняем его --
+
+alter table public."OT_Truboprovod_A_YGEO" add column primechan varchar(255) null;
+alter table public."OT_Truboprovod_A_TSNG" add column primechan varchar(255) null;
+alter table public."OT_Truboprovod_A_ASPG2" add column primechan varchar(255) null;
+alter table public."OT_Truboprovod_A_YUNG" add column primechan varchar(255) null;
+
+update "OT_Truboprovod_A_AGAZ"
+set "Field8" = regexp_replace("Field8", '\s{2,}', ' ', 'gm');
+
+select "Field8", length("Field8") from "OT_Truboprovod_A_AGAZ" where length("Field8") > 255;
+
+update "OT_Truboprovod_A_AGAZ"
+set "Field8" = regexp_replace("Field8", ' Кран шаровый с электроприводом "Auma Matic"', '; ', 'g')
+where "Field8" is not null;
+update "OT_Truboprovod_A_AGAZ"
+set "Field8" = regexp_replace("Field8", ' Кран шаровый, приварной,  с электроприводом "Auma Matic" взрывозащищенного исполнения, для подземной установки, в северном исполнении ХЛ1, продукт природный газ, метанол,', ' ', 'g')
+where "Field8" is not null;
+update "OT_Truboprovod_A_AGAZ"
+set teh_hrkt = "Field8"
+where "Field8" is not null;
+
+update "OT_Truboprovod_A_YGEO"
+set naim_tr = "Field4"
+where "Field4" is not null;
+
+update "OT_Truboprovod_A_YGEO"
+set funk_nazn = "Field7"
+where "Field7" is not null;
+
+update "OT_Truboprovod_A_YGEO"
+set teh_hrkt = "Field8"
+where "Field8" is not null;
+
+update "OT_Truboprovod_A_YGEO"
+set naim_tr = "Field4"
+where "Field4" is not null;
+
+update "OT_Truboprovod_A_YUNG"
+set teh_hrkt = "Field11"
+where "Field11" is not null;
+
+do $$
+declare
+	codes text[] := ARRAY['AGAZ', 'ASPG2', 'NGAZ', 'TSNG', 'YGEO', 'YSPG','YUNG'];
+	code text;
+begin
+	foreach code in array codes 
+	loop
+		--execute format('ALTER TABLE public."OT_Truboprovod_A_%s" ADD COLUMN dzo varchar(8) NULL;', code); 
+		--execute format('UPDATE public."OT_Truboprovod_A_%s" set dzo = %L;', code, code);
+		execute format('INSERT INTO public."OT_Truboprovod_A_klass_prav"
+(geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan, dzo)
+select geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan, dzo
+from public."OT_Truboprovod_A_%s";', code);
+	end loop;
+end $$;
+
+-- Нормализация функциональных назначений --
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = regexp_replace(funk_nazn, '(Узел приема и запуска СОД совмещенны)$', '\1й');
+select * from public."OT_Truboprovod_A_klass_prav" where funk_nazn is null or funk_nazn not in ('Охранный кран', 'Линейный кран', 'Линейная задвижка', 'Узел приема и запуска СОД', 'Узел приема и запуска СОД совмещенный', 'Кран регулятор типа «Моквелд»', 'Байпасный кран', 'Свечной кран', 'Узел подключения конденсатопровода', 'Узел подключения газопровода', 'Узел подключения нефтепровода');
+
+-- Нормализация расположения пикета --
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = replace(rasp_piket, '.', ',');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, 'П(\d+)', 'ПК\1', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '^(ПК\d+)$', '\1+00', 'g');
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '\+0(\D|$)', '+00\1', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '[\n]+', '; ', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '\s{2,}', '; ', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '(ПК)\s*(\d+)\s*(\+)\s*(\d+)', '\1\2\3\4', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '\s+[Ии]\s+', '; ', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '(ПК\s*\d+)-(\d+)', '\1+00; ПК\2+00', 'g');
+
+--update public."OT_Truboprovod_A_klass_prav"
+--set rasp_piket = regexp_replace(rasp_piket, '(ПК)0+(\d)', '\1\2', 'g');
+--update public."OT_Truboprovod_A_klass_prav"
+--set rasp_piket = regexp_replace(rasp_piket, '(ПК\d+\+\d+)\s*-\s*(?:ПК)?(\d+\+\d+)', '\1; ПК\2', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '(ПК\d+(?:\+\d+)?(?:,\d+)?)\s*[/-]\s*(?:ПК)?(\d+(?:\+\d+)?(?:,d+)?)', '\1; ПК\2', 'g');
+
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '(ПК)\s*(\d+)', '\1\2');
+update public."OT_Truboprovod_A_klass_prav"
+set rasp_piket = regexp_replace(rasp_piket, '^(\d+\+\d+)', 'ПК\1');
+
+select * from public."OT_Truboprovod_A_klass_prav" where rasp_piket ~ '\n';
+select * from public."OT_Truboprovod_A_klass_prav" where rasp_piket ~ '\/';
+select * from public."OT_Truboprovod_A_klass_prav" where rasp_piket ~ '\s\s+';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = regexp_replace(teh_hrkt, '[\n\r]', ' ', 'g')
+where teh_hrkt is not null;
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'DN1000, PN 8,3 МПа, подземный пневмогидравлический, DN250, PN10,0 МПа,подземный пневмогидравлический (3 шт.), DN700, PN 8,3 МПа, подземный пневмогидравлический'
+where teh_hrkt = 'DN1000, PN 8,3 МПа, подземный пневмогидравлический, DN250, PN10,0 МПа,подземный пневмогидравлический (3 шт.), DN700, PN 8,3 МПа, подземный пневмогидравлическ?' AND teh_hrkt is not null;
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = '"Узел камеры приема СОД конденсатопровода «Термокарстовое ГКМ – Восточно-Таркосалинское ГКМ»
+(Восточно-Таркосалинское месторождение) (УЗА №47)"'
+where naim = 'КПСОД УЗА47';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод-подключение Юрхаровского месторождения к системе МГ Ямбург-Центр. Участок км 50,7 - км 94,5 (КС Ямбургская). Лупинг км 67 - КС Ямбургская Ду1400'
+where naim = 'КП-2Р Кр 20.3' AND dzo = 'YUNG';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод-подключение Юрхаровского месторождения к системе МГ Ямбург-Центр. Участок км 50,7 - км 94,5 (КС Ямбургская). Лупинг км 67 - КС Ямбургская Ду1400'
+where naim = 'КП-4А Кр 21.4 (99.1)' AND dzo = 'YUNG';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод-подключение Юрхаровского месторождения к системе МГ Ямбург-Центр. Участок км 50,7 - км 94,5 (КС Ямбургская). Лупинг км 67 - КС Ямбургская Ду1400'
+where naim = 'КП-3А Кр 95Р' AND dzo = 'YUNG';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = new_data.teh_hrkt_new
+FROM (
+VALUES
+('Крановый узел 7Г','Кран шаровый с электроприводом "Auma Matic"  DN219 PN160; Кран шаровый с электроприводом "Auma Matic"   DN89 PN160'),
+('Крановый узел 1Г','Кран шаровый, приварной,  с электроприводом "Auma Matic" взрывозащищенного исполнения, для подземной установки, в северном исполнении ХЛ1, продукт природный газ, метанол,   DN200 PN160; Кран шаровый, приварной,  с электроприводом "Auma Matic" взрывозащищенного исполнения, для подземной установки, в северном исполнении ХЛ1, продукт природный газ, метанол,   DN80 PN160'),
+('Крановый узел 5Г','Кран шаровый с электроприводом "Auma Matic"  DN200 PN160; Кран шаровый с электроприводом "Auma Matic"   DN150 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел 8Г','Кран шаровый с электроприводом "Auma Matic"   DN150 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел 6Г','Кран шаровый с электроприводом "Auma Matic"   DN150 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN161'),
+('Крановый узел 23Г','Кран шаровый с электроприводом "Auma Matic"   DN400 PN160; Кран шаровый с электроприводом "Auma Matic"   DN250 PN160; Кран шаровый с электроприводом "Auma Matic"   DN200 PN160; Кран шаровый с электроприводом "Auma Matic"   DN150 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел 2Г','Кран шаровый с электроприводом "Auma Matic"  DN200 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160                                                         '),
+('Крановый узел 3Г','Кран шаровый с электроприводом "Auma Matic"   DN300 PN160; Кран шаровый с электроприводом "Auma Matic"   DN200 PN160; Кран шаровый с электроприводом "Auma Matic"   DN100 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел - 9Г','Кран шаровый с электроприводом "Auma Matic"   DN300 PN160; Кран шаровый с электроприводом "Auma Matic"   DN200 PN160; Кран шаровый с электроприводом "Auma Matic"   DN150 PN160; Кран шаровый с электроприводом "Auma Matic"   DN100 PN160; Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел - 13Г','  Кран шаровый с электроприводом "Auma Matic"   DN200 PN160                                    Кран шаровый с электроприводом "Auma Matic"   DN100 PN160'),
+('Крановый узел 26Г','Кран шаровый с электроприводом "Auma Matic"   DN400 PN160                Кран шаровый с электроприводом "Auma Matic"   DN250 PN160                    Кран шаровый с электроприводом "Auma Matic"   DN200 PN160                Кран шаровый с электроприводом "Auma Matic"   DN150 PN160                                   Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Крановый узел - 22Г','Кран шаровый с электроприводом "Auma Matic"   DN400 PN160                Кран шаровый с электроприводом "Auma Matic"   DN250 PN160                    Кран шаровый с электроприводом "Auma Matic"   DN200 PN160                Кран шаровый с электроприводом "Auma Matic"   DN150 PN160                                   Кран шаровый с электроприводом "Auma Matic"   DN80 PN160'),
+('Узел запорной арматуры УЗА 2-1','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду250, Ду200'),
+('Узел запорной арматуры УЗА 2-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду250, Ду200'),
+('Узел запорной арматуры УЗА 3Н',''),
+('Узел запорной арматуры УЗА 3-1','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('Узел запорной арматуры УЗА 3-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200, Ду300'),
+('Узел запорной арматуры УЗА 3-3','Электрофицированный с телемеханикой; Задвижка DN 400 PN 4 МПА '),
+('Узел запорной арматуры УЗА 3-4','Электрофицированный с телемеханикой; Задвижка DN 300 PN 16 МПА  '),
+('Узел запорной арматуры УЗА 5-1','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200, Ду150'),
+('Узел запорной арматуры УЗА 5-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200, Ду250'),
+('Узел запорной арматуры УЗА 6-1','Оснащен камерой пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('Узел запорной арматуры УЗА 7-1','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('Узел запорной арматуры УЗА 7-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду150, Ду200, Ду250, Ду400'),
+('Узел запорной арматуры УЗА 7-3','Задвижка Ду200 Р 16 Мпа ручная; Задвижка Ду250 Р 4 Мпа ручная'),
+('Узел запорной арматуры УЗА 71-2','Задвижка Ду150 Р 16 Мпа ручная'),
+('Узел запорной арматуры УЗА 71-3','Задвижка Ду150 Р 4 Мпа ручная'),
+('Узел запорной арматуры УЗА 7-4','Задвижка Ду200 Р 16 Мпа ручная; Задвижка Ду200 Р 16 Мпа ручная; Задвижка Ду250 Р 4 Мпа ручная'),
+('Узел запорной арматуры УЗА 7-5','Задвижка Ду250 Р 4 Мпа ручная'),
+('Узел запорной арматуры УЗА 7-6','Задвижка Ду250 Р 16 Мпа ручная'),
+('Узел запорной арматуры УЗА 7-7','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду250, Ду300, Ду400'),
+('Узел запорной арматуры УЗА 8-1','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду150, Ду250'),
+('Узел запорной арматуры УЗА 8-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду150, Ду250, Ду400'),
+('Узел запорной арматуры УЗА 9-1','Оснащен камерой пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('Узел запорной арматуры УЗА 9-2','Оснащен камерами пуска и приема средств очистки и диагностики (КППСОД), Ду200, Ду250'),
+('Узел запорной арматуры УЗА 15-1','Оснащен камерой пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('Узел запорной арматуры УЗА 15-2','Оснащен камерой пуска и приема средств очистки и диагностики (КППСОД), Ду200'),
+('УЗА 1','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 2','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 3','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 4','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 5','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 6','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 7','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 8','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 9','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 10','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 11','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('УЗА 12','Охранный узел электрофицированный с телемеханикой, оснащен камерой пуска и приема очистки и диагностики (КППСОД), Ду250'),
+('Узел 1','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду250 Ру4 МПа ручная; Задвижка байпасная Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 2','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 3','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 4','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 7','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 8','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 9','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 10','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел 12','Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду250 Ру4 МПа ручная; Задвижка Ду250 Ру4 МПа под электропривод; Задвижка байпасная Ду250 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная; Задвижка Ду50 Ру4 МПа ручная'),
+('Узел1Н38','Задвижка Ду100 Ру10 МПа ручная; Задвижка Ду50 Ру10 МПа ручная; Задвижка Ду50 Ру10 МПа ручная')
+) AS new_data(naim_val, teh_hrkt_new)
+WHERE public."OT_Truboprovod_A_klass_prav".naim = new_data.naim_val and dzo = 'AGAZ';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Метанолопровод от УПГ (ЦПС) до т.вр. УЗ СОД. Рег. № 11' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Задвижка шиберная с ручным приводом, надземной установки, Ду50, Ру25,0'
+where naim_tr = 'Метанолопровод от УПГ (ЦПС) до т.вр. УЗ СОД. Рег. № 11' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'ВВ: Высоконапорный водовод  от т.2  до куста скважин № 1' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'ВВ: Высоконапорный водовод  от т.2  до куста скважин № 1' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3 – К-4. Рег. №24' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3 – К-4. Рег. №24' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3а  – К-5. Рег. №25' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3а  – К-5. Рег. №25' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3б – К-15.' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод   т. врезки 3б – К-15.' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод  КНС – т. врезки 1. Рег. №23' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод  КНС – т. врезки 1. Рег. №23' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод  от  т.4  до куста скважин № 6. Рег. №26' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод  от  т.4  до куста скважин № 6. Рег. №26' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод  от  т.13  до куста скважин № 18.  Рег. №33' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод  от  т.13  до куста скважин № 18.  Рег. №33' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100 Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод  от  т.5  до куста скважин № 7. Рег. № 27' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод  от  т.5  до куста скважин № 7. Рег. № 27' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод от  т.13 до куста скважин № 14. Рег. №32' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод от  т.13 до куста скважин № 14. Рег. №32' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод т. 14  до куста скважин № 16. Рег. №31' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод т. 14  до куста скважин № 16. Рег. №31' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный  водовод т. 6 до куста скважин № 8. Рег. №21' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный  водовод т. 6 до куста скважин № 8. Рег. №21' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  КНС до куста скважин № 12. Рег. №18' AND dzo = 'YGEO' and naim = 'Крановый узел т.11';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  КНС до куста скважин № 12. Рег. №18' AND dzo = 'YGEO' and naim = 'Крановый узел т.11а';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  КНС до куста скважин № 12. Рег. №18' AND dzo = 'YGEO' and naim = 'Крановый узел ЗД12';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  КНС до куста скважин № 12. Рег. №18' AND dzo = 'YGEO' and naim = 'Крановый узел ЗД13';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод  КНС до куста скважин № 12. Рег. №18' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  от  т.1 до куста скважин №2. Рег. №23' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод  от  т.1 до куста скважин №2. Рег. №23' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод  от т.2  до куста скважин № 1. Рег. №20' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод  от т.2  до куста скважин № 1. Рег. №20' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод от Р8 до куста №6. Рег. № 19' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод от Р8 до куста №6. Рег. № 19' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод от точки врезки 11а до куста № 10В. Рег. №22' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод от точки врезки 11а до куста № 10В. Рег. №22' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду80, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод от точки врезки 8 до куст № 10. Рег. №29' AND dzo = 'YGEO' and rasp_piket = 'ПК2+68';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод от точки врезки 8 до куст № 10. Рег. №29' AND dzo = 'YGEO' and rasp_piket = 'ПК2+59; ПК1+59';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод от точки врезки 8 до куст № 10. Рег. №29' AND dzo = 'YGEO' and rasp_piket = 'ПК0+00';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод от точки врезки 8 до куст № 10. Рег. №29' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0, '
+where naim_tr = 'Высоконапорный водовод т.врезки 11- до куста скважин №13. Рег. №30' AND dzo = 'YGEO' and rasp_piket = 'ПК2+52';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод т.врезки 11- до куста скважин №13. Рег. №30' AND dzo = 'YGEO' and rasp_piket = 'ПК2+64';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод т.врезки 11- до куста скважин №13. Рег. №30' AND dzo = 'YGEO' and rasp_piket = 'ПК13+27';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод т.врезки 11- до куста скважин №13. Рег. №30' AND dzo = 'YGEO' and rasp_piket = 'ПК0+00';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод т.врезки 11- до куста скважин №13. Рег. №30' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод т.врезки 12 - т.врезки 14. Рег. №31' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод т.врезки 12 - т.врезки 14. Рег. №31' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру16,0,'
+where naim_tr = 'Высоконапорный водовод т.врезки 7- до куста скважин №9. Рег. №28' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Высоконапорный водовод т.врезки 7- до куста скважин №9. Рег. №28' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру25,0, (электрофицированный)'
+where naim_tr = 'Газ системы поддержания пластового давления (ППД). Рег. №120' AND dzo = 'YGEO' and naim = 'Узел №1';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру25,0'
+where naim_tr = 'Газ системы поддержания пластового давления (ППД). Рег. №120' AND dzo = 'YGEO' and naim = 'точка выхода на поверхность';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Газ системы поддержания пластового давления (ППД). Рег. №120' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду350 Pу10 (электрофицированный)'
+where naim_tr = 'Газопровод внешнего транспорта газа от УКПГ-КУУГ- точка подключения к МГ ООО "Газпром трансгаз Югорск". Рег. № 5' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейный кран'
+where naim_tr = 'Газопровод внешнего транспорта газа от УКПГ-КУУГ- точка подключения к МГ ООО "Газпром трансгаз Югорск". Рег. № 5' AND dzo = 'YGEO' and rasp_piket  = 'ПК1491+00';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Газопровод внешнего транспорта газа от УКПГ-КУУГ- точка подключения к МГ ООО "Газпром трансгаз Югорск". Рег. № 5' AND dzo = 'YGEO' and rasp_piket != 'ПК1491+00';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду150 Ру10 (электрофицированный)'
+where naim_tr = 'Газопровод на собственные нужды Ду159 от УПГ "НОВАТЭК - ТАРКОСАЛЕНЕФТЕГАЗ" - ПСП ООО "ЯРГЕО". Рег.№7' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейный кран'
+where naim_tr = 'Газопровод на собственные нужды Ду159 от УПГ "НОВАТЭК - ТАРКОСАЛЕНЕФТЕГАЗ" - ПСП ООО "ЯРГЕО". Рег.№7' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Газосборный трубопровод от т.вр. до ЦПС. Рег.№8' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Газосборный трубопровод от т.вр. до ЦПС. Рег.№8' AND dzo = 'YGEO' and naim = 'Точка врезки';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Газосборный трубопровод от т.вр. до ЦПС. Рег.№8' AND dzo = 'YGEO' and rasp_piket  = 'ПК326+60,70';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Кран шаровый, цельносварной, с концами под приварку, с ручным управлением, подземного исполнения, Ду350, Ру10'
+where naim_tr = 'Газосборный трубопровод от т.вр. до ЦПС. Рег.№8' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Задвижка шиберная с электроприводом, надземной установки, Ду50, Ру25,0'
+where naim_tr = 'Газосборный трубопровод от т.вр. до ЦПС. Рег.№8' AND dzo = 'YGEO' and rasp_piket  = 'ПК326+60,70';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод    К-10  - до  т. врезки 8. Рег. № 9' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный  трубопровод    К-10  - до  т. врезки 8. Рег. № 9' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод    т. врезки 1а – ЦПС. №2' AND dzo = 'YGEO' and (rasp_piket = 'ПК4+13; ПК9+13' or rasp_piket = 'ПК12+27; ПК3+40');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Нефтегазосборный  трубопровод    т. врезки 1а – ЦПС. №2' AND dzo = 'YGEO' and rasp_piket = 'ПК1+20; ПК6+20';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный  трубопровод    т. врезки 1а – ЦПС. №2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный  трубопровод    т. врезки 1а – ЦПС. №2' AND dzo = 'YGEO' and funk_nazn = 'узел приема и запуска СОД';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру2,5, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный  трубопровод    т. врезки 1а – ЦПС. №2' AND dzo = 'YGEO' and funk_nazn = 'узел приема и запуска СОД' and geom = 'POINT (7912917.275351587 9919566.533041826)'::geometry;
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-4  -  т. врезки 3. Рег. № 3' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД совмещенный'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-4  -  т. врезки 3. Рег. № 3' AND dzo = 'YGEO' and rasp_piket = 'ПК36+20; ПК27+20';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру2,5'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-4  -  т. врезки 3. Рег. № 3' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду400, Ру2,5, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-4  -  т. врезки 3. Рег. № 3' AND dzo = 'YGEO' and rasp_piket = 'ПК36+20; ПК27+20';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-5  -  т. врезки 3а. Рег. № 4' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный  трубопровод   К-5  -  т. врезки 3а. Рег. № 4' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 11  до  т. 11б. Рег. №11' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру2,5,'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 11  до  т. 11б. Рег. №11' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 14  до  т. 13. Рег. №14' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 14  до  т. 13. Рег. №14' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 18  до  т. 13. Рег. №16' AND dzo = 'YGEO' and rasp_piket = 'ПК14+78';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру2,5,'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 18  до  т. 13. Рег. №16' AND dzo = 'YGEO' and rasp_piket = 'ПК14+78';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 18  до  т. 13. Рег. №16' AND dzo = 'YGEO' and rasp_piket != 'ПК14+78';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру2,5, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный  трубопровод   с куста скважин № 18  до  т. 13. Рег. №16' AND dzo = 'YGEO' and rasp_piket != 'ПК14+78';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод (лупинг) перемычка в районе кустов скважин №5, №6' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0,'
+where naim_tr = 'Нефтегазосборный  трубопровод (лупинг) перемычка в районе кустов скважин №5, №6' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный  трубопровод с куста скважин № 2  до  т. 1. №108' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5,'
+where naim_tr = 'Нефтегазосборный  трубопровод с куста скважин № 2  до  т. 1. №108' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста 8 до КУ 19/Л ( узел задвижек №13), Рег. № 83' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста 8 до КУ 19/Л ( узел задвижек №13), Рег. № 83' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and (rasp_piket = 'ПК15+68,88' or rasp_piket = 'ПК7+60');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and (rasp_piket = 'ПК15+68,88' or rasp_piket = 'ПК7+60');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and (rasp_piket != 'ПК15+68,88' and rasp_piket != 'ПК7+60');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0 (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and (rasp_piket != 'ПК15+68,88' and rasp_piket != 'ПК7+60');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин № 13 до точки врезки 12. Рег. №118' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин № 13 до точки врезки 12. Рег. №118' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД совмещенный'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and rasp_piket = 'ПК3+65';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and naim = 'Узел 5/Л';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0 (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and rasp_piket = 'ПК3+65';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №19 до точки врезки 4. Рег. № 111' AND dzo = 'YGEO' and (naim = 'Узел 8/Л' or naim = 'Узел 9/Л' or naim = 'Узел 11/Л');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 4 до ЦПС. Рег. № 112' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 4 до ЦПС. Рег. № 112' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 4 до ЦПС. Рег. № 112' AND dzo = 'YGEO' and rasp_piket = 'ПК78+88';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод Куст скважин №12- ЦПС. Рег. № 12' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду350, Ру2,5 (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод Куст скважин №12- ЦПС. Рег. № 12' AND dzo = 'YGEO' and rasp_piket = 'ПК52+57; ПК31+57';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный трубопровод Куст скважин №12- ЦПС. Рег. № 12' AND dzo = 'YGEO' and (naim = 'Узел 10' or naim = 'Узел 17');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру2,5,'
+where naim_tr = 'Нефтегазосборный трубопровод Куст скважин №12- ЦПС. Рег. № 12' AND dzo = 'YGEO' and (naim = 'Узел 14' or naim = 'Узел 15' or naim = 'Узел 16');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод от точки 1а до ЦПС. Рег. № 2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД совмещенный'
+where naim_tr = 'Нефтегазосборный трубопровод от точки 1а до ЦПС. Рег. № 2' AND dzo = 'YGEO' and (naim = 'Узел приема и запуска СОД №3. Камера приема' or naim = 'Узел приема и запуска СОД №3. Камера запуска');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду400, Ру2,5 (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод от точки 1а до ЦПС. Рег. № 2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру2,5, (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод от точки 1а до ЦПС. Рег. № 2' AND dzo = 'YGEO' and (naim = 'Узел приема и запуска СОД №3. Камера приема' or naim = 'Узел приема и запуска СОД №3. Камера запуска');
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД совмещенный'
+where naim_tr = 'Нефтегазосборный трубопровод от точки 1а до ЦПС. Рег. №2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 16 до т. 14. Рег. №15' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру2,5,'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 16 до т. 14. Рег. №15' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 8  до  т. 6. Рег № 7' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 8  до  т. 6. Рег № 7' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 9 до т. врезки7.  Рег. № 8' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру2,5'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин № 9 до т. врезки7.  Рег. № 8' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №1 - т. вр. 2 Рег № 1' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру2,5,'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №1 - т. вр. 2 Рег № 1' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №10В до т.врезки 11а.  Рег. № 10' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру16,0,'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №10В до т.врезки 11а.  Рег. № 10' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №13 - до т.врезки 11. Рег. № 13' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру2,5'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №13 - до т.врезки 11. Рег. № 13' AND dzo = 'YGEO' and (naim = 'Узел 10' or naim = 'Точка врезки 11');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру2,5,'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №13 - до т.врезки 11. Рег. № 13' AND dzo = 'YGEO' and (naim = 'Узел 9' or naim = 'Точка врезки 12');
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №6 - т. вр. 4. Рег. №  5' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду400, Ру2,5 (электрофицированный)'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №6 - т. вр. 4. Рег. №  5' AND dzo = 'YGEO' and naim = 'Узел 2';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5,'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №6 - т. вр. 4. Рег. №  5' AND dzo = 'YGEO' and naim = 'Точка врезки 4';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №7 - т. вр. 5. Рег. № 6' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру2,5'
+where naim_tr = 'Нефтегазосборный трубопровод с куста скважин №7 - т. вр. 5. Рег. № 6' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин № 7. Рег. № 115' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин № 7. Рег. № 115' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин № 8. Рег. №116' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин № 8. Рег. №116' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин №10. Рег. №117' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод-перемычка в районе куста скважин №10. Рег. №117' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейный кран'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO' and (naim = 'УЗСОД №1' or naim = 'УЗСОД №2' or naim = 'УЗСОД №3' or naim = 'УПСОД №3' or naim = 'УПСОД №4' or naim = 'УЗСОД №4' or naim = 'УПСОД №5' or naim = 'УЗСОД №6' or naim = 'УПСОД №7' or naim = 'УПСОД №8');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду350 Pу10'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO' and (naim = 'УЗА №4' or naim = 'УЗА №5' or naim = 'УЗА №10' or naim = 'УЗА №1' or naim = 'УЗА №13 (КШ 13)');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду350 Pу10 (электрофицированный)'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO' and (naim = 'УПСОД №3' or naim = 'УЗСОД №2' or naim = 'УЗА №10' or naim = 'УЗА №6' or naim = 'УЗА №7' or naim = 'УПСОД №5' or naim = 'УЗСОД №4' or naim = 'УЗА №8' or naim = 'УЗА №9' or naim = 'УЗА №11' or naim = 'УЗА №12 (КШ 12)' or naim = 'УПСОД №7' or naim = 'УЗСОД №1' or naim = 'УЗА №2' or naim = 'УЗА №3');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду350 Pу10'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO' and (naim = 'УЗА №14 (КШ 14)' or naim = 'УЗА №15 (КШ 15)' or naim = 'УЗА №16 (КШ 16)');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду400 Pу10(электрофицированный)'
+where naim_tr = 'Нефтепровод внешнего транспорта от Ярудейского НГКМ до ПСП ООО "ЯРГЕО" 0-349 км. Рег. № 1' AND dzo = 'YGEO' and (naim = 'УЗСОД №6' or naim = 'УПСОД №8');
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтепровод Ду 325 от Зд .№ 85 СИКН ПСП «ЯРГЕО» до Узла №18 точка врезки в нефтепровод перемычку. Рег № 3' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейный, Ду300 Pу1,6'
+where naim_tr = 'Нефтепровод Ду 325 от Зд .№ 85 СИКН ПСП «ЯРГЕО» до Узла №18 точка врезки в нефтепровод перемычку. Рег № 3' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейный, Ду300 Pу6,3'
+where naim_tr = 'Нефтепровод Ду 325 от Зд .№ 85 СИКН ПСП «ЯРГЕО» до Узла №18 точка врезки в нефтепровод перемычку. Рег № 3' AND dzo = 'YGEO' and rasp_piket = 'ПК6+42.70';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтепровод от т.врезки 13 до т. врезки 12. Рег. № 45' AND dzo = 'YGEO' and naim = 'Узел 9';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'узел приема и запуска СОД совмещенный'
+where naim_tr = 'Нефтепровод от т.врезки 13 до т. врезки 12. Рег. № 45' AND dzo = 'YGEO' and naim != 'Узел 9';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду100, Ру2,5,'
+where naim_tr = 'Нефтепровод от т.врезки 13 до т. врезки 12. Рег. № 45' AND dzo = 'YGEO' and naim = 'Узел 9';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтепровод перемычка Ду-325 мм до ПСП ООО «ЯРГЕО» от ЦПС ВТСМ ООО «НОВАТЭК - ТАРКОСАЛЕНЕФТЕГАЗ» - ЛПДС «Пур-Пе». Рег. № 4' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду300 Pу6,3'
+where naim_tr = 'Нефтепровод перемычка Ду-325 мм до ПСП ООО «ЯРГЕО» от ЦПС ВТСМ ООО «НОВАТЭК - ТАРКОСАЛЕНЕФТЕГАЗ» - ЛПДС «Пур-Пе». Рег. № 4' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Низконапорный водовод от куста скважин №2В да ЦПС ( в две линии). Рег. №34' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду250, Ру4,0,'
+where naim_tr = 'Низконапорный водовод от куста скважин №2В да ЦПС ( в две линии). Рег. №34' AND dzo = 'YGEO';
+
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Подводящий нефтепровод Ду 400 от ПСП до НПС "Пур-Пе". Рег.№2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Линейный, Ду400 Pу2,5 (электрофицированный)'
+where naim_tr = 'Подводящий нефтепровод Ду 400 от ПСП до НПС "Пур-Пе". Рег.№2' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 11б до точки врезки 11, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста скв.№10В. Рег № 109'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 11б до точки врезки 11, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста с' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 11б до точки врезки 11, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста скв.№10В. Рег № 109' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду150, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 11б до точки врезки 11, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста скв.№10В. Рег № 109' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от точки врезки 11б до точки врезки 11, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста скв.№10В. Рег № 109' AND dzo = 'YGEO' and (naim = 'Точка врезки 11' or naim = 'Узел 25/Л' or naim = 'Точка 11б');
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №1 до точки врезки 2, в т.ч. Нефтегазосборный-перемычка в районе куста скважин №1. Рег. № 119'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №1 до точки врезки 2, в т.ч. Нефтегазосборный-перемычка в районе куста скважин №1. Ре' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №1 до точки врезки 2, в т.ч. Нефтегазосборный-перемычка в районе куста скважин №1. Рег. № 119' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №1 до точки врезки 2, в т.ч. Нефтегазосборный-перемычка в районе куста скважин №1. Рег. № 119' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №5 до точки врезки 3 в т.ч. Нефтегазосборный трубопровод-перемычка в районе кустов скважин №5 Рег. № 113'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №5 до точки врезки 3 в т.ч. Нефтегазосборный трубопровод-перемычка в районе кустов с' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №5 до точки врезки 3 в т.ч. Нефтегазосборный трубопровод-перемычка в районе кустов скважин №5 Рег. № 113' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №5 до точки врезки 3 в т.ч. Нефтегазосборный трубопровод-перемычка в районе кустов скважин №5 Рег. № 113' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №6 до точки врезки 4, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста  скв.№6. Рег. № 114'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №6 до точки врезки 4, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = 'Линейная задвижка'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №6 до точки врезки 4, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста  скв.№6. Рег. № 114' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду200, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №6 до точки врезки 4, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста  скв.№6. Рег. № 114' AND dzo = 'YGEO';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ленейный,Ду300, Ру4,0,'
+where naim_tr = 'Нефтегазосборный трубопровод (лупинг) от куста скважин №6 до точки врезки 4, в т. ч. Нефтегазосборный трубопровод-перемычка в районе куста  скв.№6. Рег. № 114' AND dzo = 'YGEO' and naim = 'Узел 11/Л';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = new_data.teh_hrkt_new
+FROM (
+VALUES
+('Газопровод шлейф от кранового узла № 4 до ПК-0','Камера запуска поршня № 002-R-00203 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 500 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 7','Камера запуска поршня № 002-R-205 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 500 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 22','Камера запуска поршня № 002-R-202 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 400 PN 250.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 25','Камера запуска поршня № 002-R-210 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 400 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 30','Камера запуска поршня № 002-R-211 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 500 PN 250.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 39','Камера запуска поршня № 002-R-208 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 400 PN 250.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от кранового узла № 9 до кранового узла №11','Камера запуска поршня № 002-R-00206 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 500 PN 250.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 44','Камера запуска поршня № 002-R-204 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 400 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 45','Камера запуска поршня № 002-R-207 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 300 PN 250.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от кранового узла №8 до ПК-0','Камера запуска поршня № 002-R-00209 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 500 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от куста газовых скважин № 47 до ПК-0','Камера запуска поршня № 002-R-201 (КШС) шаровой чистяще-скребковый кран Hartmann Valves с возможностью запуска очистных снарядов HMR DN 500 PN 250. Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.'),
+('Газопровод шлейф от кранового узла №21 до ПК-0 (Арктический каскад)','Камера запуска поршня № 602-R-00213 (КШС) шаровой чистяще-скребковый кран Ibor с возможностью запуска очистных снарядов DN 500 PN 160.Тип привода: редуктор с ручным приводом Rotork IW 9, SG 700.')
+) AS new_data(naim_val, teh_hrkt_new)
+WHERE public."OT_Truboprovod_A_klass_prav".naim_tr = new_data.naim_val and dzo = 'YSPG';
+
+-- нормализация функционального назначения --
+update public."OT_Truboprovod_A_klass_prav"
+set funk_nazn = upper(left(funk_nazn, 1)) || substring(funk_nazn, 2)
+where funk_nazn ~ '^[а-я]';
+
+select funk_nazn from public."OT_Truboprovod_A_klass_prav" where funk_nazn ~ '^[а-я]';
+
+-- переносы строк --
+select naim, naim_tr
+from public."OT_Truboprovod_A_klass_prav"
+where naim ~ '[\r\n]+' or naim_tr ~ '[\r\n]+';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = regexp_replace(naim, '[\r\n]+', ' ', 'g'),
+	naim_tr = regexp_replace(naim_tr, '[\r\n]+', ' ', 'g')
+where naim ~ '[\r\n]+' or naim_tr ~ '[\r\n]+';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = trim(both '"' from naim_tr)
+where naim_tr like '"%' or naim_tr like '%"';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = trim(naim)
+where naim like ' %' or naim like '% ';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = trim(naim_tr)
+where naim_tr like ' %' or naim_tr like '% ';
+
+select distinct naim, count(*) from public."OT_Truboprovod_A_klass_prav" group by naim;
+
+update public."OT_Truboprovod_A_klass_prav" a
+set class_name = 'Узел запорно регулирующей арматуры'
+where a.class_name = 'Узел запорно регулирующей арматур';
+
+delete from public."OT_Truboprovod_A_klass_prav"
+where class_name = 'Точка врезки';
+
+update public."OT_Truboprovod_A_klass_prav" a
+set naim_tr = 'ННК с куста 7 на УПН ЯЯ НГКМ; ВНК с куста 7 на УПН ЯЯ НГКМ; ВНК с куста 5 на УПН ЯЯ НГКМ; ННК с кустов 5,6 на УПН ЯЯ НГКМ; ВНК с кустов 5,7 на УПН ЯЯ НГКМ; ННК с кустов 5,6,7 на УПН ЯЯ НГКМ'
+where naim_tr ilike 'ННК с куста 7 на УПН ЯЯ НГКМ ВНК с куста 7 на УПН ЯЯ НГКМ ВНК с куста 5 на УПН ЯЯ НГКМ ННК с кустов 5,6 на УПН ЯЯ НГКМ ВНК с кустов 5,7 на УПН ЯЯ НГКМ%';
+
+
+update public."OT_Truboprovod_A_klass_prav" a
+set id = gen_random_uuid();
+update public."OT_Truboprovod_A_klass_prav" a
+set id = p.id
+from public."OT_Truboprovod_P_klass_prav" p
+where a.naim = p.naim and a.naim_tr = p.naim_tr and a.dzo  = p.dzo and a.class_name = p.class_name ;
+
+select * from public."OT_Truboprovod_A_klass_prav" a where id not in (select id from public."OT_Truboprovod_P_klass_prav" p);
+
+
+--ДОБАВИЛ ЗАМЕНУ МНОЖЕСТВЕННЫХ ПРОБЕЛОВ НА 1
+update public."OT_Truboprovod_A_klass_prav" otakp
+set teh_hrkt = regexp_replace(teh_hrkt, E'\\s+', ' ', 'g')
+where otakp.teh_hrkt ~ E'\\s{2,}';
+
+--ДОБАВИЛ ЗАПОЛНЕНИЕ КОД КЛАССИФИКАТОРА ДЛЯ ОТСУТСТВУЮЩИХ
+update public."OT_Truboprovod_A_klass_prav" otakp
+set class_code = '1030204001'
+where otakp.class_name = 'Узел запорно регулирующей арматуры';
+
+update public."OT_Truboprovod_A_klass_prav" otakp
+set class_code = '1030204002'
+where otakp.class_name = 'Узел запуска очистных устройств';
+
+update public."OT_Truboprovod_A_klass_prav" otakp
+set class_code = '1030204003'
+where otakp.class_name = 'Узел приема очистных устройств';
+
+-- ИСПРАВИЛ ПИКЕТЫ
+update public."OT_Truboprovod_A_klass_prav" otakp
+set rasp_piket  = 'ПК52+13'
+where otakp.naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 22';
+
+update public."OT_Truboprovod_A_klass_prav" otakp
+set rasp_piket  = 'ПК274+25'
+where otakp.naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 39';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Нефтегазопровод в/д от КУ 7.1 до КУ 7.2; Нефтегазопровод н/д от КУ 7.1 до КУ 7.2; Нефтегазопровод в/д от КУ 5.2 до КУ 7.2; Нефтегазопровод н/д от КУ 5.2 до КУ 7.2; Нефтегазопровод в/д от КУ 7.2 до КУ 7.3; Нефтегазопровод н/д от КУ 7.2 до КУ 7.3'
+where naim = 'Узел запорной арматуры УЗА 71-3';
+
+delete from public."OT_Truboprovod_A_klass_prav"
+where (class_name = 'Точка врезки') AND (dzo = 'NGAZ');
+
+delete from public."OT_Truboprovod_A_klass_prav"
+where (class_name = 'Точка врезки') AND (dzo = 'YUNG');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = trim(both '"' from teh_hrkt);
+update public."OT_Truboprovod_A_klass_prav"
+set class_name = 'Узел запорно регулирующей арматуры'
+where class_name = 'Узел запорно регулирующей арматур' AND (dzo = 'YGEO');
+
+update public."OT_Truboprovod_A_klass_prav"
+set class_name = 'Узел запорно регулирующей арматуры'
+where class_name = 'Узел запорно регулирующей арматур' AND (dzo = 'YGEO');
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод внешнего транспорта Ду700; Конденсатопровод внешнего транспорта Ду250'
+where naim_tr IN ('Газопровод внешнего транспорта Ду700: Конденсатопровод внешнего транспорта Ду250');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Кш с электроприводом Ду250 Ру125, КШ ручной Ду100 Ру125, Ду50 Ру125 - 5 ед., Ду50 Ру160 - 4 ед.,Ду80 Ру125 - 4 ед., Ду80 Ру160- 2 ед., КР ручной Ду100 Ру160, КР ду80 Ру160, КШ с электроприводом Ду700 Ру100 - 2 ед., КШ с электроприводом Ду300 Ру100, КШ ручной Ду50 Ру160 - 6 ед., Кш ручной Ду100 Ру100 - 3 ед.'
+where teh_hrkt IN ('Кш с электроприводом Ду250 Ру125, КШ ручной Ду100 Ру125, Ду50 Ру125 - 5 ед., Ду50 Ру160 - 4 ед.,Ду80 Ру125 - 4 ед., Ду80 Ру160- 2 ед., КР ручной Ду100 Ру160, КР ду80 Ру160, КШ с электроприводом Ду700 Ру100 - 2 ед., КШ с электроприводом Ду300 Ру100, КШ ру');
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод от Дороговского м-я до УКПГ Северо-Русского м-я; Метанолопровод от УКПГ Северо-Русского м-я до кустов газовых скважин Дороговского м-я; Газопровод от КГС-1- до т.вр. КГС-1; Метанолопровод от т. вр КГС1- до КГС1'
+where naim_tr IN ('Газопровод от Дороговского месторождения до УКПГ Северо-Русского месторождения; Метанолопровод от УКПГ Северо-Русского месторождения до кустов газовых скважин Дороговского месторождения; Газопровод от КГС-1- до т.вр. КГС-1; Метанолопровод от т. вр КГС1-');
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = replace(naim_tr, '  ', ' ')
+where naim_tr like '%  %';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = 'Кран К1'
+where naim = 'кран К1';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = 'Кран К2'
+where naim = 'кран К2';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = 'Кран К2.2'
+where naim = 'кран К2,2';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = 'Кран К2.1'
+where naim = 'кран К2.1';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim = 'Кран КрР1'
+where naim = 'кран КрР1';
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'КШ ручной привод Ду250 Ру102, Ду100 Ру102 - 2 ед., ЗКЛ с ручным приводом Ду100 Ру1020'
+where (teh_hrkt IN ('КШ ручной привод Ду250 Ру102, Ду100 Ру102 - 2 ед. ЗКЛ с ручным приводом Ду100 Ру102','КШ ручной привод Ду250 Ру102, Ду100 Ру102 - 2 ед., ЗКЛ с ручным приводом Ду100 Ру102','КШ ручной привод Ду250 Ру102, Ду100 Ру102 - 2 ед., ЗКЛ с ручным приводом Ду100 Ру102 ')) AND (dzo = 'TSNG');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'КШ ручной привод Ду250 Ру102, Ду50 Ру102 - 4 ед. ЗКЛ с ручным приводом Ду100 Ру1020'
+where teh_hrkt IN ('КШ ручной привод Ду250 Ру102, Ду50 Ру102 - 4 ед. ЗКЛ с ручным приводом Ду100 Ру102')
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'DN1000. PN - 8,3 Мпа. Т рабочей среды - от -20 °С до +40 °С. Состав среды - газообразная.'
+where teh_hrkt IN ('DN1000, PN- 8,3 Мпа. Т рабочей среды - от -20 °С до +40 °С. Состав среды - газообразная.','DN1000. PN - 8,3 Мпа. Т рабочей среды - от -20 °С до +40 °С. Состав среды - газообразная.')
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'DN400, PN - 2,0...11,8 Мпа. Т рабочей среды - от -10 °С до +52 °С. Состав среды - газообразная или жидкая.'
+where teh_hrkt IN ('DN400, PN - 2,0...11,8 Мпа. Т рабочей среды - от -10 °С до +52 °С. Состав среды - газообразная или жидкая.','DN400. PN - 2,0...11,8 Мпа. Т рабочей среды - от -10 °С до +52 °С. Состав среды - газообразная или жидкая');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Ду250 Ру100 электропривод'
+where teh_hrkt IN ('Ду250 Ру100 электроприво','Ду250 Ру100 электропривод','Ду250 Ру100 электроприводд');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска ДУ 400'
+where teh_hrkt IN ('Камера запуска ДУ400');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду 200'
+where teh_hrkt IN ('Камера запуска Ду200');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду 350'
+where teh_hrkt IN ('Камера запуска Ду350');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера приема Ду200'
+where teh_hrkt IN ('Камера приема ДУ 200','Камера приема Ду 200');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера приема Ду350'
+where teh_hrkt IN ('Камера приема Ду 350');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера приема Ду400'
+where teh_hrkt IN ('Камера приема Ду 400');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду400'
+where teh_hrkt IN ('Камера запуска ДУ 400');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду200'
+where teh_hrkt IN ('Камера запуска Ду 200');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду250'
+where teh_hrkt IN ('Камера запуска Ду 250');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду300'
+where teh_hrkt IN ('Камера запуска Ду 300');
+
+update public."OT_Truboprovod_A_klass_prav"
+set teh_hrkt = 'Камера запуска Ду350'
+where teh_hrkt IN ('Камера запуска Ду 350');
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 1'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 1';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 4'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе №№ 2, 4, 40';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф от кранового узла №21 до ПК-0 (Арктический каскад)'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе №№ 7,45';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 46'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 46';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 22'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 22';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 25'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 25';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 30'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 30';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 39'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 39';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 44'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 44';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 45'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 45';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 47'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 47';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод шлейф куста газовых скважин № 7'
+where naim = 'Узел запуска очистных устройств в газопроводе шлейфе № 7';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Газопровод подключения от УКГП-В до точки врезки в МГ "Заполярное-Уренгой I, II"'
+where naim_tr = 'Газопровод подключения от УКГП-В до точки врезки в МГ "Заполярное-Уренгой I, II';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Система транспорта газового конденсата от УКПГ до точки врезки в конденсатопровод АО "АРКТИКГАЗ"'
+where naim_tr = 'Система транспорта газового конденсата от УКПГ до точки врезки в конденсатопровод АО "АРКТИКГАЗ';
+
+update public."OT_Truboprovod_A_klass_prav"
+set naim_tr = 'Конденсатопровод от УКПГ-1 до Завода СПГ и СГК на ОГТ; Метанолопровод от УКПГ-1 до Завода СПГ и СГК на ОГТ'
+where naim_tr IN ('Конденсатопроводот УКПГ-1 до Завода СПГ и СГК на ОГТ; Метанолопровод от УКПГ-1 до Завода СПГ и СГК на ОГТ');
+
+этап 2
+-- заполнение справочника  Состав линейного объекта в nsi --
+-- заполнение простых значений --
+insert into public."CompositionOfLinearObject"
+(id, naim, teh_hrkt, primechan)
+select n.id, n.naim, n.teh_hrkt, n.primechan
+from dblink('dbname=normalize',
+	'select id, naim, teh_hrkt, primechan
+	 from public."OT_Truboprovod_A_klass_prav"')
+as n(id uuid, naim varchar(255), teh_hrkt text,
+	primechan varchar(255));
+	
+-- заполнение значений Назначение объектов обустройства с заменой на uuid --
+update public."CompositionOfLinearObject" ld
+set funk_nazn = pdo.id
+from dblink('dbname=normalize',
+	'select id, funk_nazn
+	 from public."OT_Truboprovod_A_klass_prav" where funk_nazn is not null')
+as n(id uuid, funk_nazn varchar(255))
+join public."PurposesOfPipelineNetworkObjects" pdo on n.funk_nazn = pdo.naim
+where ld.id  = n.id;
+
+with source as (
+select remote_data.id, unnest(string_to_array(remote_data.naim_tr, ';')) as pipeline_name
+from dblink('dbname=normalize',
+	'select id, naim_tr
+	 from ready."OT_Truboprovod_A_klass_prav" where naim_tr is not null')
+	 as remote_data(id uuid, naim_tr text)
+)
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select distinct on (sd.id, trim(sd.pipeline_name))
+sd.id, p.id, now(), now(), false
+from source sd
+join public."Pipelines" p on p.naim_tr = trim(sd.pipeline_name)
+on conflict (id, naim_tr) do nothing;
+
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '5359213c-d5c5-4fd6-9328-ec979378f2ed', 'bbdb4cfc-5f83-43ef-b95b-d244f7c3e080', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '3178ce51-8f3e-4cb8-9cfc-6a526c2d2ccf', 'bbdb4cfc-5f83-43ef-b95b-d244f7c3e080', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select '7b85be20-708f-4211-b453-a939694a2e56', 'ea11496b-3171-4524-9342-47fb9902ceec', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', '1f386186-b886-49c3-9e53-942e5519e058', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', '36d6d58d-87ab-4491-a7a7-b7f464cc0b25', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', 'bb8d73ac-3a60-4936-bd0d-33e3f815ed35', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', '6b64a4ee-b3a6-4d42-9c1b-debd9ba41d3c', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', '0b0483b6-694c-4d80-9058-4616f0b37b77', now(), now(), false;
+
+insert into public."CompositionOfLinearObjectPipelines"  (id, naim_tr, "CreatedAt", "UpdatedAt", "IsBlocked")
+select 'df1447a7-896d-47b3-8dd7-c703290d819b', '9cf27c78-f880-4e09-a881-7ae9efa1dd5f', now(), now(), false;
+
+insert into public."CompositionOfLinerObjectPikets" (id, rasp_piket, "CreatedAt", "UpdatedAt", "IsBlocked")
+select distinct n.id, trim(unnest(string_to_array(n.rasp_piket, ';'))), now(), now(), false 
+from dblink(
+	'dbname=normalize',
+	'select id, rasp_piket from "OT_Truboprovod_A_klass_prav" ') 
+as n(id uuid, rasp_piket text) 
+order by n.id;
+
+этап 3
+-- очистка bgd_PAO
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_A_klass_prav';
+	v_target_table text  := 'OT_Truboprovod_A';
+	v_db text;
+	v_conn_str text;
+	v_sql text;
+	v_count text;
+remote_sql text;
+dblink_sql text;
+begin
+		v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123 options=-csearch_path=ready', '');
+		v_sql := format('truncate table "%s"',
+			v_target_table
+		);
+
+		remote_sql := format('select dblink_exec(
+			''host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=bgd_PAO user=admin password=admin123'', 
+			%L);', v_sql);
+				
+		raise notice 'SQL for db %: %', v_db, v_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;
+end $$;
+-- Заполнение bgd_PAO
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_A_klass_prav';
+	v_target_table text  := 'OT_Truboprovod_A';
+	v_db text;
+	v_conn_str text;
+	v_sql text;
+	v_count text;
+remote_sql text;
+dblink_sql text;
+begin
+		v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123 options=-csearch_path=ready', '');
+		v_sql := format('
+			insert into %I (id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan)
+			select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+			from dblink(''%s'', 
+				''select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+				from %I'')
+			as t(id uuid, geom geometry(MultiPolygon,3857), class_code character varying(10), class_name character varying(100),
+				 naim_tr character varying(255), naim character varying(255), rasp_piket character varying(255),
+				 funk_nazn character varying(255), teh_hrkt text, primechan text)',
+			v_target_table,
+			v_conn_str,
+			v_source_table
+		);
+
+		remote_sql := format('select dblink_exec(
+			''host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=bgd_PAO user=admin password=admin123'', 
+			%L);', v_sql);
+				
+		raise notice 'SQL for db %: %', v_db, v_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;
+end $$;
+
+
+-- очистка дочерних bgd --
+
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_A_klass_prav';
+	v_target_table text := 'OT_Truboprovod_A';
+	v_db text;
+	v_conn_str text;
+	v_bgd_conn_str text;
+	remote_sql text;
+	v_sql text;
+	v_count text;
+begin
+	for v_db in
+		select distinct d.dzo
+		from dblink(
+			'host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123 options=-csearch_path=ready',
+			'select dzo from "OT_Truboprovod_P_klass_prav" where dzo is not null')
+		as d(dzo varchar(5))
+	loop
+		v_bgd_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=bgd_%s user=admin password=admin123', v_db);
+		v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123', '');
+		v_sql := format('truncate table "%s"',
+			v_target_table
+		);
+		remote_sql := format('select dblink_exec(
+			''%s'', 
+			%L);', v_bgd_conn_str, v_sql);
+		raise notice 'SQL for db %: %', v_db, remote_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;		
+	end loop;
+end $$;
+
+-- заполнение дочерних bgd --
+do $$
+declare
+	v_source_table text := 'OT_Truboprovod_A_klass_prav';
+	v_target_table text := 'OT_Truboprovod_A';
+	v_db text;
+	v_conn_str text;
+	v_bgd_conn_str text;
+	remote_sql text;
+	v_sql text;
+	v_count text;
+begin
+	for v_db in
+		select distinct d.dzo
+		from dblink(
+			'host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123 options=-csearch_path=ready',
+			'select dzo from "OT_Truboprovod_A_klass_prav" where dzo is not null')
+		as d(dzo varchar(5))
+	loop
+		v_bgd_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=bgd_%s user=admin password=admin123', v_db);
+		v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123', '');
+		v_sql := format('
+			insert into %I (id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan)
+			select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+			from dblink(''%s'', 
+				''select id, geom, class_code, class_name, naim_tr, naim, rasp_piket, funk_nazn, teh_hrkt, primechan
+				from %I
+				where dzo = ''%L'''')
+			as t(id uuid, geom geometry(MultiPolygon,3857), class_code character varying(10), class_name character varying(100),
+				 naim_tr character varying(255), naim character varying(255), rasp_piket character varying(255),
+				 funk_nazn character varying(255), teh_hrkt text, primechan text)',
+			v_target_table,
+			v_conn_str,
+			v_source_table,
+			v_db
+		);
+		remote_sql := format('select dblink_exec(
+			''%s'', 
+			%L);', v_bgd_conn_str, v_sql);
+		raise notice 'SQL for db %: %', v_db, remote_sql;
+		
+		begin 
+			execute remote_sql;
+			get diagnostics v_count = ROW_COUNT;
+			raise notice 'Inserted % rows into %', v_count, v_db;
+
+		exception when others then
+			raise warning 'Error inserting into %: %', v_db, sqlerrm;
+		end;		
+	end loop;
+end $$;
+	
