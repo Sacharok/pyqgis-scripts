@@ -1826,6 +1826,17 @@ AS x
 
 /* ============================================================
    28. PIPELINES
+
+   Для каждого Pipeline теперь создаём:
+
+   match_key
+       обычное очищенное название;
+
+   technical_key
+       более строгий технический ключ;
+
+   numeric_signature
+       последовательность значимых чисел.
    ============================================================ */
 
 DROP TABLE IF EXISTS tmp_point_nsi_pipelines;
@@ -1839,7 +1850,15 @@ SELECT
 
     normalization.text_key(
         x.naim_tr
-    ) AS match_key
+    ) AS match_key,
+
+    normalization.pipeline_match_key(
+        x.naim_tr
+    ) AS technical_key,
+
+    normalization.numeric_signature(
+        x.naim_tr
+    ) AS numeric_signature
 
 FROM dblink
 (
@@ -2067,6 +2086,11 @@ LEFT JOIN tmp_point_nsi_purposes saved_target
 
 /* ============================================================
    31. РАЗБИВАЕМ naim_tr ПО ";"
+
+   Дополнительно создаём:
+       source_key
+       technical_key
+       numeric_signature
    ============================================================ */
 
 DROP TABLE IF EXISTS tmp_point_pipeline_parts;
@@ -2074,7 +2098,6 @@ DROP TABLE IF EXISTS tmp_point_pipeline_parts;
 CREATE TEMP TABLE tmp_point_pipeline_parts AS
 
 SELECT
-
     r.id,
 
     r.dzo,
@@ -2087,7 +2110,15 @@ SELECT
 
     normalization.text_key(
         btrim(x.pipeline_name)
-    ) AS source_key
+    ) AS source_key,
+
+    normalization.pipeline_match_key(
+        btrim(x.pipeline_name)
+    ) AS technical_key,
+
+    normalization.numeric_signature(
+        btrim(x.pipeline_name)
+    ) AS numeric_signature
 
 FROM normalization."OT_Truboprovod_P_ready" r
 
@@ -2123,10 +2154,13 @@ DROP TABLE IF EXISTS tmp_point_pipeline_values;
 CREATE TEMP TABLE tmp_point_pipeline_values AS
 
 SELECT
-
     dzo,
 
     source_key,
+
+    technical_key,
+
+    numeric_signature,
 
     min(source_value)
         AS source_value,
@@ -2138,7 +2172,9 @@ FROM tmp_point_pipeline_parts
 
 GROUP BY
     dzo,
-    source_key;
+    source_key,
+    technical_key,
+    numeric_signature;
 
 
 /* ============================================================
@@ -2146,28 +2182,40 @@ GROUP BY
 
    ПРИОРИТЕТ:
 
-   SAVED
-   EXACT
-   EXACT_DUPLICATE
-   UNRESOLVED
+   1. SAVED
+      ранее подтверждённое решение;
+
+   2. EXACT
+      обычное точное совпадение;
+
+   3. EXACT_DUPLICATE
+      несколько абсолютно одинаковых Pipelines;
+
+   4. TECHNICAL_EXACT
+      совпадение после технической нормализации;
+
+   5. TECHNICAL_EXACT_DUPLICATE
+      несколько технически одинаковых Pipelines;
+
+   6. UNRESOLVED
+      переходим к fuzzy.
    ============================================================ */
 
 DROP TABLE IF EXISTS tmp_point_pipeline_resolution;
 
 CREATE TEMP TABLE tmp_point_pipeline_resolution AS
 
-WITH exact_match AS
+WITH strict_match AS
 (
     SELECT
-
         v.dzo,
         v.source_key,
 
         count(n.id)
-            AS exact_count,
+            AS strict_count,
 
         min(n.id::text)::uuid
-            AS exact_id
+            AS strict_id
 
     FROM tmp_point_pipeline_values v
 
@@ -2179,10 +2227,47 @@ WITH exact_match AS
         v.source_key
 ),
 
+technical_match AS
+(
+    SELECT
+        v.dzo,
+        v.source_key,
+
+        count(n.id)
+            AS technical_count,
+
+        min(n.id::text)::uuid
+            AS technical_id
+
+    FROM tmp_point_pipeline_values v
+
+    LEFT JOIN tmp_point_nsi_pipelines n
+
+      ON n.technical_key =
+         v.technical_key
+
+     /*
+        Если в исходном названии присутствуют числа,
+        они должны совпасть.
+     */
+     AND
+     (
+         v.numeric_signature IS NULL
+
+         OR
+
+         n.numeric_signature =
+         v.numeric_signature
+     )
+
+    GROUP BY
+        v.dzo,
+        v.source_key
+),
+
 saved_ranked AS
 (
     SELECT
-
         v.dzo,
         v.source_key,
 
@@ -2233,59 +2318,83 @@ saved AS
 )
 
 SELECT
-
     v.dzo,
 
     v.source_key,
+
+    v.technical_key,
+
+    v.numeric_signature,
 
     v.source_value,
 
     v.objects_count,
 
-    e.exact_count,
+    s.strict_count
+        AS exact_count,
+
+    t.technical_count,
 
 
     CASE
 
-        WHEN s.pipeline_id IS NOT NULL
+        /* Ранее сохранённое решение */
+
+        WHEN saved.pipeline_id IS NOT NULL
          AND saved_target.id IS NOT NULL
+            THEN saved.pipeline_id
 
-            THEN s.pipeline_id
 
+        /* Сохранённый UUID исчез из neo_nsi */
 
-        WHEN s.pipeline_id IS NOT NULL
+        WHEN saved.pipeline_id IS NOT NULL
          AND saved_target.id IS NULL
-
             THEN NULL
 
 
-        ELSE e.exact_id
+        /* Обычное точное совпадение */
+
+        WHEN s.strict_count > 0
+            THEN s.strict_id
+
+
+        /* Техническое точное совпадение */
+
+        WHEN t.technical_count > 0
+            THEN t.technical_id
+
+
+        ELSE NULL
 
     END AS selected_pipeline_id,
 
 
     CASE
 
-        WHEN s.pipeline_id IS NOT NULL
+        WHEN saved.pipeline_id IS NOT NULL
          AND saved_target.id IS NOT NULL
-
             THEN 'SAVED'
 
 
-        WHEN s.pipeline_id IS NOT NULL
+        WHEN saved.pipeline_id IS NOT NULL
          AND saved_target.id IS NULL
-
             THEN 'SAVED_TARGET_MISSING'
 
 
-        WHEN e.exact_count = 1
-
+        WHEN s.strict_count = 1
             THEN 'EXACT'
 
 
-        WHEN e.exact_count > 1
-
+        WHEN s.strict_count > 1
             THEN 'EXACT_DUPLICATE'
+
+
+        WHEN t.technical_count = 1
+            THEN 'TECHNICAL_EXACT'
+
+
+        WHEN t.technical_count > 1
+            THEN 'TECHNICAL_EXACT_DUPLICATE'
 
 
         ELSE 'UNRESOLVED'
@@ -2295,17 +2404,21 @@ SELECT
 
 FROM tmp_point_pipeline_values v
 
-JOIN exact_match e
-  ON e.dzo = v.dzo
- AND e.source_key = v.source_key
-
-LEFT JOIN saved s
+JOIN strict_match s
   ON s.dzo = v.dzo
  AND s.source_key = v.source_key
 
-LEFT JOIN tmp_point_nsi_pipelines saved_target
-  ON saved_target.id = s.pipeline_id;
+JOIN technical_match t
+  ON t.dzo = v.dzo
+ AND t.source_key = v.source_key
 
+LEFT JOIN saved
+  ON saved.dzo = v.dzo
+ AND saved.source_key = v.source_key
+
+LEFT JOIN tmp_point_nsi_pipelines saved_target
+  ON saved_target.id =
+     saved.pipeline_id;
 
 /* ============================================================
    34. FUZZY-КАНДИДАТЫ funk_nazn
@@ -2487,16 +2600,25 @@ JOIN candidate_stats s
 
 /* ============================================================
    35. FUZZY-КАНДИДАТЫ naim_tr
+
+   Теперь учитываем не только similarity,
+   но и совпадение числовых обозначений.
+
+   Если источник содержит числа:
+       кандидат с другими числами
+       никогда не становится HIGH_CONFIDENCE.
+
+   При ранжировании кандидат с совпадающими числами
+   ставится выше кандидата с конфликтующими числами.
    ============================================================ */
 
 DROP TABLE IF EXISTS tmp_point_pipeline_candidates;
 
 CREATE TEMP TABLE tmp_point_pipeline_candidates AS
 
-WITH ranked AS
+WITH scored AS
 (
     SELECT
-
         u.dzo,
 
         u.source_key,
@@ -2505,11 +2627,17 @@ WITH ranked AS
 
         u.objects_count,
 
+        u.numeric_signature
+            AS source_numbers,
+
         n.id
             AS candidate_id,
 
         n.naim_tr
             AS candidate_value,
+
+        n.numeric_signature
+            AS candidate_numbers,
 
         similarity(
             u.source_key,
@@ -2517,21 +2645,27 @@ WITH ranked AS
         )
         AS similarity_value,
 
-        row_number() OVER
-        (
-            PARTITION BY
-                u.dzo,
-                u.source_key
 
-            ORDER BY
-                similarity(
-                    u.source_key,
-                    n.match_key
-                ) DESC,
+        CASE
 
-                n.id::text
-        )
-        AS candidate_rank
+            /*
+               Если в исходном названии чисел нет,
+               числового конфликта определить нельзя.
+            */
+
+            WHEN u.numeric_signature IS NULL
+                THEN true
+
+
+            WHEN n.numeric_signature =
+                 u.numeric_signature
+                THEN true
+
+
+            ELSE false
+
+        END AS numeric_compatible
+
 
     FROM tmp_point_pipeline_resolution u
 
@@ -2548,11 +2682,62 @@ WITH ranked AS
              LIMIT 1
          )
 
+
     WHERE u.resolution_method IN
     (
         'UNRESOLVED',
         'SAVED_TARGET_MISSING'
     )
+),
+
+ranked AS
+(
+    SELECT
+        s.*,
+
+
+        row_number() OVER
+        (
+            PARTITION BY
+                dzo,
+                source_key
+
+            ORDER BY
+
+                /*
+                   Сначала кандидаты без конфликта номеров.
+                */
+
+                numeric_compatible DESC,
+
+                similarity_value DESC,
+
+                candidate_id::text
+        )
+        AS candidate_rank,
+
+
+        /*
+           Для лучшего кандидата узнаём similarity
+           следующего кандидата с таким же состоянием
+           numeric_compatible.
+        */
+
+        lead(similarity_value) OVER
+        (
+            PARTITION BY
+                dzo,
+                source_key,
+                numeric_compatible
+
+            ORDER BY
+                similarity_value DESC,
+                candidate_id::text
+        )
+        AS next_similarity
+
+
+    FROM scored s
 ),
 
 top_ranked AS
@@ -2567,62 +2752,55 @@ top_ranked AS
         FROM tmp_point_config
         LIMIT 1
     )
-),
-
-candidate_stats AS
-(
-    SELECT
-
-        dzo,
-        source_key,
-
-        max(similarity_value)
-            FILTER
-            (
-                WHERE candidate_rank = 1
-            )
-            AS best_similarity,
-
-        max(similarity_value)
-            FILTER
-            (
-                WHERE candidate_rank = 2
-            )
-            AS second_similarity
-
-    FROM top_ranked
-
-    GROUP BY
-        dzo,
-        source_key
 )
 
 SELECT
+    dzo,
 
-    r.dzo,
+    source_key,
 
-    r.source_key,
+    source_value,
 
-    r.source_value,
+    objects_count,
 
-    r.objects_count,
+    candidate_rank,
 
-    r.candidate_rank,
+    candidate_id,
 
-    r.candidate_id,
+    candidate_value,
 
-    r.candidate_value,
+    source_numbers,
 
-    r.similarity_value,
+    candidate_numbers,
+
+    numeric_compatible,
+
+    similarity_value,
 
 
     CASE
 
-        WHEN r.candidate_rank <> 1
+        WHEN candidate_rank <> 1
             THEN 'ALTERNATIVE'
 
 
-        WHEN s.best_similarity >=
+        /*
+           Самый похожий текст,
+           но конфликтуют номера.
+        */
+
+        WHEN NOT numeric_compatible
+            THEN 'NUMBER_CONFLICT'
+
+
+        /*
+           Автоматически хороший кандидат только если:
+           - номера не конфликтуют;
+           - similarity высокий;
+           - следующий подходящий кандидат заметно хуже.
+        */
+
+        WHEN similarity_value >=
         (
             SELECT fuzzy_high
             FROM tmp_point_config
@@ -2631,13 +2809,13 @@ SELECT
 
         AND
         (
-            s.second_similarity IS NULL
+            next_similarity IS NULL
 
             OR
 
-            s.best_similarity
+            similarity_value
             -
-            s.second_similarity
+            next_similarity
 
             >=
             (
@@ -2656,11 +2834,7 @@ SELECT
     AS decision_hint
 
 
-FROM top_ranked r
-
-JOIN candidate_stats s
-  ON s.dzo = r.dzo
- AND s.source_key = r.source_key;
+FROM top_ranked;
 
 
 /* ============================================================
@@ -2704,19 +2878,39 @@ INSERT INTO normalization."OT_Truboprovod_P_candidates"
     candidate_id,
     candidate_value,
     similarity_value,
-    decision_hint
+    decision_hint,
+    numeric_compatible,
+    source_numbers,
+    candidate_numbers
 )
 
 SELECT
     'naim_tr',
+
     dzo,
+
     source_value,
+
     objects_count::integer,
+
     candidate_rank,
+
     candidate_id,
+
     candidate_value,
-    round(similarity_value::numeric, 4),
-    decision_hint
+
+    round(
+        similarity_value::numeric,
+        4
+    ),
+
+    decision_hint,
+
+    numeric_compatible,
+
+    source_numbers,
+
+    candidate_numbers
 
 FROM tmp_point_pipeline_candidates;
 
@@ -3001,88 +3195,21 @@ WHERE resolution_method =
 
 
 /* ============================================================
-   41. ПРОБЛЕМЫ PIPELINES
+   41. ДУБЛИ PIPELINES
+
+   Это НЕ ошибка.
+
+   Возможны два варианта:
+
+   EXACT_DUPLICATE
+       несколько абсолютно одинаковых naim_tr.
+
+   TECHNICAL_EXACT_DUPLICATE
+       исходные строки отличаются оформлением,
+       но после технической нормализации считаются одинаковыми.
+
+   В обоих случаях автоматически выбирается один UUID.
    ============================================================ */
-
-INSERT INTO normalization."OT_Truboprovod_P_issues"
-(
-    severity,
-    issue_type,
-    object_id,
-    dzo,
-    field_name,
-    source_value,
-    details
-)
-
-SELECT
-    'REVIEW',
-    'PIPELINE_NULL',
-    id,
-    dzo,
-    'naim_tr',
-    NULL,
-    'Не указано наименование трубопровода'
-
-FROM normalization."OT_Truboprovod_P_ready"
-
-WHERE naim_tr IS NULL;
-
-
-INSERT INTO normalization."OT_Truboprovod_P_issues"
-(
-    severity,
-    issue_type,
-    dzo,
-    field_name,
-    source_value,
-    details
-)
-
-SELECT
-
-    CASE
-        WHEN resolution_method =
-             'SAVED_TARGET_MISSING'
-            THEN 'ERROR'
-        ELSE 'REVIEW'
-    END,
-
-    CASE
-        WHEN resolution_method =
-             'SAVED_TARGET_MISSING'
-            THEN 'PIPELINE_SAVED_TARGET_MISSING'
-        ELSE 'PIPELINE_UNRESOLVED'
-    END,
-
-    dzo,
-
-    'naim_tr',
-
-    source_value,
-
-    'Объектов: '
-        || objects_count
-        ||
-        CASE
-            WHEN resolution_method =
-                 'SAVED_TARGET_MISSING'
-
-                THEN '. Сохранённый Pipeline UUID отсутствует в neo_nsi.'
-
-            ELSE '. Точного соответствия нет. Посмотреть кандидатов.'
-        END
-
-FROM tmp_point_pipeline_resolution
-
-WHERE resolution_method IN
-(
-    'UNRESOLVED',
-    'SAVED_TARGET_MISSING'
-);
-
-
-/* Точные дубли Pipeline — НЕ ошибка */
 
 INSERT INTO normalization."OT_Truboprovod_P_issues"
 (
@@ -3096,20 +3223,44 @@ INSERT INTO normalization."OT_Truboprovod_P_issues"
 
 SELECT
     'WARNING',
-    'PIPELINE_EXACT_DUPLICATE',
+
+    CASE
+        WHEN resolution_method = 'EXACT_DUPLICATE'
+            THEN 'PIPELINE_EXACT_DUPLICATE'
+        ELSE
+            'PIPELINE_TECHNICAL_DUPLICATE'
+    END,
+
     dzo,
+
     'naim_tr',
+
     source_value,
 
-    'В Pipelines найдено записей: '
-        || exact_count
-        || '. Автоматически выбран UUID '
-        || selected_pipeline_id
+    CASE
+
+        WHEN resolution_method = 'EXACT_DUPLICATE'
+        THEN
+            'Найдено абсолютно одинаковых Pipelines: '
+            || exact_count
+            || '. Автоматически выбран UUID '
+            || selected_pipeline_id
+
+        ELSE
+            'После технической нормализации найдено Pipelines: '
+            || technical_count
+            || '. Автоматически выбран UUID '
+            || selected_pipeline_id
+
+    END
 
 FROM tmp_point_pipeline_resolution
 
-WHERE resolution_method =
-      'EXACT_DUPLICATE';
+WHERE resolution_method IN
+(
+    'EXACT_DUPLICATE',
+    'TECHNICAL_EXACT_DUPLICATE'
+);
 
 
 /* ============================================================
