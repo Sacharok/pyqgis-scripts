@@ -1,0 +1,591 @@
+/* ============================================================
+   04_POINT_BGD_PUBLISH
+
+   Запись готовых точек:
+
+       bgd_PAO
+       +
+       bgd_<DZO>
+
+   НИКАКИХ TRUNCATE.
+
+   Новый id      -> INSERT
+   Существующий  -> UPDATE
+   ============================================================ */
+
+
+DROP TABLE IF EXISTS tmp_point_bgd_config;
+
+CREATE TEMP TABLE tmp_point_bgd_config
+(
+    host_name text NOT NULL,
+
+    port_no integer NOT NULL,
+
+    user_name text NOT NULL,
+
+    user_password text NOT NULL,
+
+    pao_database text NOT NULL
+);
+
+
+INSERT INTO tmp_point_bgd_config
+VALUES
+(
+    'ХОСТ',
+    5432,
+    'ПОЛЬЗОВАТЕЛЬ',
+    'ПАРОЛЬ',
+    'bgd_PAO'
+);
+
+
+/* ============================================================
+   1. БЛОКИРОВКА
+   ============================================================ */
+
+DO $$
+BEGIN
+
+    IF EXISTS
+    (
+        SELECT 1
+        FROM normalization."OT_Truboprovod_P_issues"
+        WHERE severity IN ('ERROR', 'REVIEW')
+    )
+    THEN
+
+        RAISE EXCEPTION
+            'BGD-публикация запрещена: 01 содержит ERROR/REVIEW.';
+
+    END IF;
+
+
+    IF EXISTS
+    (
+        SELECT 1
+        FROM normalization."OT_Truboprovod_P_publish_issues"
+        WHERE severity = 'ERROR'
+    )
+    THEN
+
+        RAISE EXCEPTION
+            'BGD-публикация запрещена: 02 содержит ошибки.';
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   2. ЦЕЛЕВЫЕ БАЗЫ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_bgd_targets;
+
+CREATE TEMP TABLE tmp_point_bgd_targets
+(
+    target_name text,
+
+    database_name text,
+
+    dzo_filter varchar(8)
+);
+
+
+/* PAO получает все строки */
+
+INSERT INTO tmp_point_bgd_targets
+(
+    target_name,
+    database_name,
+    dzo_filter
+)
+
+SELECT
+    'PAO',
+    pao_database,
+    NULL
+
+FROM tmp_point_bgd_config;
+
+
+/* Дочерние BGD только для ДЗО текущей поставки */
+
+INSERT INTO tmp_point_bgd_targets
+(
+    target_name,
+    database_name,
+    dzo_filter
+)
+
+SELECT DISTINCT
+    d.dzo,
+    d.bgd_database,
+    d.dzo
+
+FROM normalization."OT_Truboprovod_P_ready" r
+
+JOIN normalization."DZO" d
+    ON d.dzo = r.dzo
+   AND d.is_active;
+
+
+/* ============================================================
+   3. ПРЕДВАРИТЕЛЬНО ПРОВЕРЯЕМ ВСЕ BGD
+
+   project_id ищем ПО НАЗВАНИЮ проекта
+   отдельно внутри каждой БД.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_bgd_precheck;
+
+CREATE TEMP TABLE tmp_point_bgd_precheck
+(
+    target_name text,
+
+    database_name text,
+
+    project_count integer,
+
+    project_id uuid,
+
+    status text
+);
+
+
+DO $$
+DECLARE
+
+    cfg record;
+
+    t record;
+
+    v_conn constant text :=
+        'point_bgd_check';
+
+    v_connstr text;
+
+    v_project_name text;
+
+    v_count integer;
+
+    v_guid uuid;
+
+BEGIN
+
+    SELECT *
+    INTO cfg
+    FROM tmp_point_bgd_config
+    LIMIT 1;
+
+
+    SELECT project_name
+    INTO v_project_name
+
+    FROM normalization."Projects"
+
+    WHERE object_group =
+          'OT_Truboprovod'
+
+      AND is_active;
+
+
+    IF v_project_name IS NULL THEN
+
+        RAISE EXCEPTION
+            'Не настроен проект OT_Truboprovod в normalization.Projects';
+
+    END IF;
+
+
+    FOR t IN
+
+        SELECT *
+        FROM tmp_point_bgd_targets
+
+    LOOP
+
+        v_connstr :=
+            format
+            (
+                'host=%s port=%s dbname=%s user=%s password=%s',
+
+                cfg.host_name,
+                cfg.port_no,
+                t.database_name,
+                cfg.user_name,
+                cfg.user_password
+            );
+
+
+        IF v_conn =
+           ANY
+           (
+               COALESCE(
+                   dblink_get_connections(),
+                   ARRAY[]::text[]
+               )
+           )
+        THEN
+            PERFORM dblink_disconnect(v_conn);
+        END IF;
+
+
+        PERFORM dblink_connect(
+            v_conn,
+            v_connstr
+        );
+
+
+        SELECT
+            count(*),
+            min(x.guid::text)::uuid
+
+        INTO
+            v_count,
+            v_guid
+
+        FROM dblink
+        (
+            v_conn,
+
+            format
+            (
+                'SELECT "Guid"
+                 FROM public."Projects"
+                 WHERE btrim("Name") = %L',
+
+                v_project_name
+            )
+        )
+
+        AS x
+        (
+            guid uuid
+        );
+
+
+        INSERT INTO tmp_point_bgd_precheck
+        (
+            target_name,
+            database_name,
+            project_count,
+            project_id,
+            status
+        )
+
+        VALUES
+        (
+            t.target_name,
+            t.database_name,
+            v_count,
+            v_guid,
+
+            CASE
+                WHEN v_count = 1
+                    THEN 'OK'
+                WHEN v_count = 0
+                    THEN 'PROJECT_NOT_FOUND'
+                ELSE
+                    'PROJECT_NOT_UNIQUE'
+            END
+        );
+
+
+        PERFORM dblink_disconnect(
+            v_conn
+        );
+
+    END LOOP;
+
+END $$;
+
+
+/* Показываем проверку */
+
+SELECT *
+FROM tmp_point_bgd_precheck
+ORDER BY target_name;
+
+
+/* Блокировка */
+
+DO $$
+BEGIN
+
+    IF EXISTS
+    (
+        SELECT 1
+        FROM tmp_point_bgd_precheck
+        WHERE status <> 'OK'
+    )
+    THEN
+
+        RAISE EXCEPTION
+            'Не все BGD прошли проверку проекта. Публикация остановлена.';
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   4. ПУБЛИКАЦИЯ
+   ============================================================ */
+
+DO $$
+DECLARE
+
+    cfg record;
+
+    t record;
+
+    r record;
+
+    v_conn constant text :=
+        'point_bgd_write';
+
+    v_connstr text;
+
+    v_project_id uuid;
+
+    v_count bigint;
+
+BEGIN
+
+    SELECT *
+    INTO cfg
+    FROM tmp_point_bgd_config
+    LIMIT 1;
+
+
+    FOR t IN
+
+        SELECT *
+        FROM tmp_point_bgd_targets
+
+    LOOP
+
+        SELECT project_id
+        INTO v_project_id
+
+        FROM tmp_point_bgd_precheck
+
+        WHERE target_name =
+              t.target_name;
+
+
+        v_connstr :=
+            format
+            (
+                'host=%s port=%s dbname=%s user=%s password=%s',
+
+                cfg.host_name,
+                cfg.port_no,
+                t.database_name,
+                cfg.user_name,
+                cfg.user_password
+            );
+
+
+        IF v_conn =
+           ANY
+           (
+               COALESCE(
+                   dblink_get_connections(),
+                   ARRAY[]::text[]
+               )
+           )
+        THEN
+            PERFORM dblink_disconnect(v_conn);
+        END IF;
+
+
+        PERFORM dblink_connect(
+            v_conn,
+            v_connstr
+        );
+
+
+        PERFORM dblink_exec(
+            v_conn,
+            'BEGIN'
+        );
+
+
+        v_count := 0;
+
+
+        FOR r IN
+
+            SELECT *
+            FROM normalization."OT_Truboprovod_P_ready"
+
+            WHERE
+                t.dzo_filter IS NULL
+
+                OR
+
+                dzo =
+                t.dzo_filter
+
+        LOOP
+
+            PERFORM dblink_exec
+            (
+                v_conn,
+
+                format
+                (
+                    $SQL$
+
+                    INSERT INTO public."OT_Truboprovod_P"
+                    (
+                        id,
+                        project_id,
+                        geom,
+                        class_code,
+                        class_name,
+                        naim_tr,
+                        naim,
+                        rasp_piket,
+                        funk_nazn,
+                        teh_hrkt,
+                        primechan
+                    )
+
+                    VALUES
+                    (
+                        %L::uuid,
+                        %L::uuid,
+                        ST_GeomFromEWKT(%L),
+                        %L,
+                        %L,
+                        %L,
+                        %L,
+                        %L,
+                        %L,
+                        %L,
+                        %L
+                    )
+
+                    ON CONFLICT (id)
+
+                    DO UPDATE SET
+
+                        project_id =
+                            EXCLUDED.project_id,
+
+                        geom =
+                            EXCLUDED.geom,
+
+                        class_code =
+                            EXCLUDED.class_code,
+
+                        class_name =
+                            EXCLUDED.class_name,
+
+                        naim_tr =
+                            EXCLUDED.naim_tr,
+
+                        naim =
+                            EXCLUDED.naim,
+
+                        rasp_piket =
+                            EXCLUDED.rasp_piket,
+
+                        funk_nazn =
+                            EXCLUDED.funk_nazn,
+
+                        teh_hrkt =
+                            EXCLUDED.teh_hrkt,
+
+                        primechan =
+                            EXCLUDED.primechan;
+
+                    $SQL$,
+
+                    r.id,
+
+                    v_project_id,
+
+                    CASE
+                        WHEN r.geom IS NULL
+                            THEN NULL
+                        ELSE ST_AsEWKT(r.geom)
+                    END,
+
+                    r.class_code,
+
+                    r.class_name,
+
+                    r.naim_tr,
+
+                    r.naim,
+
+                    r.rasp_piket,
+
+                    r.funk_nazn,
+
+                    r.teh_hrkt,
+
+                    r.primechan
+                )
+            );
+
+
+            v_count :=
+                v_count + 1;
+
+        END LOOP;
+
+
+        PERFORM dblink_exec(
+            v_conn,
+            'COMMIT'
+        );
+
+
+        PERFORM dblink_disconnect(
+            v_conn
+        );
+
+
+        RAISE NOTICE
+            'База %, обработано объектов: %',
+            t.database_name,
+            v_count;
+
+    END LOOP;
+
+
+EXCEPTION
+
+    WHEN OTHERS THEN
+
+        BEGIN
+            PERFORM dblink_exec(
+                v_conn,
+                'ROLLBACK'
+            );
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+
+
+        BEGIN
+            PERFORM dblink_disconnect(
+                v_conn
+            );
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+
+
+        RAISE;
+
+END $$;
