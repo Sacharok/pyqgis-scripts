@@ -1,0 +1,498 @@
+/* ============================================================
+   00_SETUP_POINT.sql
+
+   НАСТРОЙКА ЛОКАЛЬНОЙ СИСТЕМЫ НОРМАЛИЗАЦИИ
+   ТРУБОПРОВОДЫ — ТОЧЕЧНЫЕ ОБЪЕКТЫ (P)
+
+   Выполняется ОДИН РАЗ в локальной PostgreSQL.
+
+   Создаёт:
+     1. входную таблицу для загрузки из QGIS;
+     2. результирующую таблицу READY;
+     3. служебные таблицы накопленных правил;
+     4. список допустимых ДЗО;
+     5. функции для сравнения текста.
+
+   Никаких подключений к удалённым БД здесь нет.
+   ============================================================ */
+
+
+/* ============================================================
+   0.1. Расширения
+
+   dblink:
+       нужен для чтения neo_nsi / bgd_PAO / bgd_<DZO>.
+
+   pg_trgm:
+       нужен для поиска похожих строк.
+
+   uuid-ossp:
+       нужен для генерации UUID новым объектам.
+   ============================================================ */
+
+CREATE EXTENSION IF NOT EXISTS dblink;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+
+/* ============================================================
+   0.2. Служебные схемы
+   ============================================================ */
+
+CREATE SCHEMA IF NOT EXISTS norm;
+CREATE SCHEMA IF NOT EXISTS ready;
+
+
+/* ============================================================
+   0.3. Функция для сравнения текста
+
+   ВАЖНО:
+   это НЕ окончательная нормализация строки.
+
+   Функция делает только технический ключ,
+   чтобы одинаковые по смыслу строки можно было сравнить:
+
+       - переводит в нижний регистр;
+       - ё -> е;
+       - Enter / Tab -> пробел;
+       - неразрывный пробел -> обычный;
+       - несколько пробелов -> один;
+       - trim.
+
+   Исходный текст эта функция не изменяет.
+   ============================================================ */
+
+CREATE OR REPLACE FUNCTION norm.text_key(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+SELECT
+    CASE
+        WHEN p_text IS NULL THEN NULL
+
+        ELSE replace(
+            lower(
+                btrim(
+                    regexp_replace(
+                        replace(
+                            regexp_replace(
+                                p_text,
+                                E'[\r\n\t]+',
+                                ' ',
+                                'g'
+                            ),
+                            chr(160),
+                            ' '
+                        ),
+                        '[[:space:]]+',
+                        ' ',
+                        'g'
+                    )
+                )
+            ),
+            'ё',
+            'е'
+        )
+    END;
+$$;
+
+
+/* ============================================================
+   0.4. ВХОДНАЯ ТАБЛИЦА
+
+   Именно сюда загружаем SHP через QGIS.
+
+   ВАЖНО:
+   id НЕ имеет DEFAULT uuid_generate_v4().
+
+   Это принципиально.
+
+   Если объект пришёл:
+       с id    -> сохраняем его;
+       без id  -> 01_PREPARE_CHECK создаст UUID.
+
+   id_origin:
+       SOURCE    - id пришёл из исходного файла;
+       GENERATED - id создан нами.
+
+   dzo:
+       обязательно заполняем перед запуском нормализации.
+
+   naim_tr и rasp_piket сразу TEXT.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS public."OT_Truboprovod_P_input"
+(
+    id uuid NULL,
+
+    id_origin varchar(12) NULL,
+
+    geom geometry(Point, 3857) NULL,
+
+    class_code varchar(10) NULL,
+
+    class_name varchar(100) NULL,
+
+    naim_tr text NULL,
+
+    naim varchar(255) NULL,
+
+    rasp_piket text NULL,
+
+    funk_nazn varchar(255) NULL,
+
+    teh_hrkt text NULL,
+
+    primechan text NULL,
+
+    dzo varchar(8) NULL
+);
+
+
+/* ============================================================
+   0.5. РЕЗУЛЬТАТ НОРМАЛИЗАЦИИ
+
+   Это таблица, которая заменяет старую:
+       OT_Truboprovod_P_klass_prav
+
+   Но теперь:
+       naim_tr    = TEXT
+       rasp_piket = TEXT
+
+   project_id здесь специально отсутствует.
+
+   Он будет определяться только при публикации
+   в конкретную BGD.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS ready."OT_Truboprovod_P_klass_prav"
+(
+    id uuid NOT NULL,
+
+    geom geometry(Point, 3857) NULL,
+
+    class_code varchar(10) NULL,
+
+    class_name varchar(100) NULL,
+
+    naim_tr text NULL,
+
+    naim varchar(255) NULL,
+
+    rasp_piket text NULL,
+
+    funk_nazn varchar(255) NULL,
+
+    teh_hrkt text NULL,
+
+    primechan text NULL,
+
+    dzo varchar(8) NULL,
+
+    CONSTRAINT "OT_Truboprovod_P_klass_prav_pkey"
+        PRIMARY KEY (id)
+);
+
+
+/* ============================================================
+   0.6. ДОПУСТИМЫЕ ДЗО
+
+   Здесь храним маршрутизацию.
+
+   В будущем:
+       YGEO -> bgd_YGEO
+       YSPG -> bgd_YSPG
+       и т.д.
+
+   NGAZ_v2 и YGEO_v2 сюда сознательно не включаем.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_dzo
+(
+    dzo varchar(8) PRIMARY KEY,
+
+    bgd_database text NOT NULL,
+
+    is_active boolean NOT NULL DEFAULT true
+);
+
+
+INSERT INTO norm.point_dzo
+(
+    dzo,
+    bgd_database
+)
+VALUES
+
+('AGAZ',  'bgd_AGAZ'),
+('ASPG2', 'bgd_ASPG2'),
+('NGAZ',  'bgd_NGAZ'),
+('TSNG',  'bgd_TSNG'),
+('YGEO',  'bgd_YGEO'),
+('YSPG',  'bgd_YSPG'),
+('YUNG',  'bgd_YUNG')
+
+ON CONFLICT (dzo)
+DO UPDATE SET
+
+    bgd_database = EXCLUDED.bgd_database;
+
+
+/* ============================================================
+   0.7. СООТВЕТСТВИЕ КЛАССОВ
+
+   Вместо нескольких UPDATE class_name -> class_code.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_class_map
+(
+    class_name varchar(100) PRIMARY KEY,
+
+    class_code varchar(10) NOT NULL,
+
+    is_active boolean NOT NULL DEFAULT true
+);
+
+
+INSERT INTO norm.point_class_map
+(
+    class_name,
+    class_code
+)
+VALUES
+
+(
+    'Узел запорно регулирующей арматуры',
+    '1030203001'
+),
+
+(
+    'Узел запуска очистных устройств',
+    '1030203002'
+),
+
+(
+    'Узел приема очистных устройств',
+    '1030203003'
+),
+
+(
+    'Точка врезки',
+    '1030203004'
+),
+
+(
+    'Точки входа и выхода на поверхность',
+    '1030203005'
+),
+
+(
+    'Путевой подогреватель нефти',
+    '1030203006'
+),
+
+(
+    'Контрольный пункт линейной телемеханики',
+    '1030203007'
+)
+
+ON CONFLICT (class_name)
+DO UPDATE SET
+
+    class_code = EXCLUDED.class_code;
+
+
+/* ============================================================
+   0.8. ИЗВЕСТНЫЕ ОБЩИЕ ИСПРАВЛЕНИЯ
+
+   Сюда постепенно перенесём старые UPDATE типа:
+
+       кран К1 -> Кран К1
+       старое написание -> правильное написание
+
+   dzo = '*'
+       правило действует на все ДЗО.
+
+   dzo = 'YGEO'
+       правило только YGEO.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_value_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL DEFAULT '*',
+
+    field_name varchar(50) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    normalized_value text,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_value_map_field_chk
+        CHECK
+        (
+            field_name IN
+            (
+                'naim',
+                'class_name',
+                'naim_tr',
+                'rasp_piket',
+                'funk_nazn',
+                'teh_hrkt',
+                'primechan'
+            )
+        ),
+
+    CONSTRAINT point_value_map_unique
+        UNIQUE
+        (
+            dzo,
+            field_name,
+            source_key
+        )
+);
+
+
+/* ============================================================
+   0.9. РУЧНЫЕ РЕШЕНИЯ funk_nazn -> UUID НСИ
+
+   Это память системы.
+
+   Если пользователь однажды подтвердил:
+
+       "старое значение"
+           ->
+       PurposesOfPipelineNetworkObjects.id
+
+   в следующих поставках решение будет применяться само.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_purpose_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    purpose_id uuid NOT NULL,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_purpose_map_unique
+        UNIQUE
+        (
+            dzo,
+            source_key
+        )
+);
+
+
+/* ============================================================
+   0.10. РУЧНЫЕ РЕШЕНИЯ naim_tr -> Pipelines.id
+
+   Аналогично сохраняем однажды принятое решение.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_pipeline_map
+(
+    map_id bigserial PRIMARY KEY,
+
+    dzo varchar(8) NOT NULL,
+
+    source_value text NOT NULL,
+
+    source_key text
+        GENERATED ALWAYS AS
+        (norm.text_key(source_value))
+        STORED,
+
+    pipeline_id uuid NOT NULL,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT point_pipeline_map_unique
+        UNIQUE
+        (
+            dzo,
+            source_key
+        )
+);
+
+
+/* ============================================================
+   0.11. ИСКЛЮЧЕНИЯ КОНКРЕТНЫХ ОБЪЕКТОВ
+
+   Например:
+
+       конкретная точка
+       имеет особую teh_hrkt
+
+   Это НЕ общее правило.
+
+   Поэтому сохраняем по UUID объекта.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS norm.point_object_override
+(
+    object_id uuid NOT NULL,
+
+    field_name varchar(50) NOT NULL,
+
+    override_value text,
+
+    note text,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY
+    (
+        object_id,
+        field_name
+    )
+);
+
+
+/* ============================================================
+   0.12. ПРОВЕРКА НАСТРОЙКИ
+   ============================================================ */
+
+SELECT
+    'SETUP POINT READY' AS result;
