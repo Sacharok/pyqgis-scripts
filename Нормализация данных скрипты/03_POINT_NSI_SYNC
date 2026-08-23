@@ -1,0 +1,350 @@
+/* ============================================================
+   03_POINT_NSI_SYNC
+
+   ФАКТИЧЕСКАЯ ЗАПИСЬ В neo_nsi.
+
+   Запускать ТОЛЬКО после успешного 02.
+   ============================================================ */
+
+
+DROP TABLE IF EXISTS tmp_point_nsi_write_config;
+
+CREATE TEMP TABLE tmp_point_nsi_write_config
+(
+    neo_nsi_conn text NOT NULL
+);
+
+INSERT INTO tmp_point_nsi_write_config
+VALUES
+(
+    'host=ХОСТ port=5432 dbname=neo_nsi user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ'
+);
+
+
+/* ============================================================
+   1. БЛОКИРОВКИ
+   ============================================================ */
+
+DO $$
+BEGIN
+
+    IF EXISTS
+    (
+        SELECT 1
+        FROM normalization."OT_Truboprovod_P_issues"
+        WHERE severity IN ('ERROR', 'REVIEW')
+    )
+    THEN
+        RAISE EXCEPTION
+            '03 запрещён: в результате 01 остаются ERROR/REVIEW.';
+    END IF;
+
+
+    IF EXISTS
+    (
+        SELECT 1
+        FROM normalization."OT_Truboprovod_P_publish_issues"
+        WHERE severity = 'ERROR'
+    )
+    THEN
+        RAISE EXCEPTION
+            '03 запрещён: этап 02 содержит ошибки публикации.';
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   2. ЗАПИСЬ
+   ============================================================ */
+
+DO $$
+DECLARE
+
+    v_conn constant text :=
+        'point_nsi_write';
+
+    v_connstr text;
+
+    r record;
+
+BEGIN
+
+    SELECT neo_nsi_conn
+    INTO v_connstr
+    FROM tmp_point_nsi_write_config
+    LIMIT 1;
+
+
+    IF v_conn =
+       ANY(
+           COALESCE(
+               dblink_get_connections(),
+               ARRAY[]::text[]
+           )
+       )
+    THEN
+        PERFORM dblink_disconnect(v_conn);
+    END IF;
+
+
+    PERFORM dblink_connect(
+        v_conn,
+        v_connstr
+    );
+
+
+    /* Всё изменение neo_nsi в одной удалённой транзакции */
+
+    PERFORM dblink_exec(
+        v_conn,
+        'BEGIN'
+    );
+
+
+    /* --------------------------------------------------------
+       CompositionOfLinearObject
+       -------------------------------------------------------- */
+
+    FOR r IN
+
+        SELECT *
+        FROM normalization."OT_Truboprovod_P_nsi_object"
+
+    LOOP
+
+        PERFORM dblink_exec
+        (
+            v_conn,
+
+            format
+            (
+                $SQL$
+
+                INSERT INTO public."CompositionOfLinearObject"
+                (
+                    id,
+                    naim,
+                    funk_nazn,
+                    teh_hrkt,
+                    primechan
+                )
+
+                VALUES
+                (
+                    %L::uuid,
+                    %L,
+                    %L::uuid,
+                    %L,
+                    %L
+                )
+
+                ON CONFLICT (id)
+
+                DO UPDATE SET
+
+                    naim =
+                        EXCLUDED.naim,
+
+                    funk_nazn =
+                        EXCLUDED.funk_nazn,
+
+                    teh_hrkt =
+                        EXCLUDED.teh_hrkt,
+
+                    primechan =
+                        EXCLUDED.primechan,
+
+                    "UpdatedAt" =
+                        now();
+
+                $SQL$,
+
+                r.id,
+                r.naim,
+                r.funk_nazn,
+                r.teh_hrkt,
+                r.primechan
+            )
+        );
+
+    END LOOP;
+
+
+    /* --------------------------------------------------------
+       Для каждого объекта текущей поставки синхронизируем
+       пикеты и Pipelines.
+
+       Удаляем ТОЛЬКО связи этого id.
+       Остальные объекты neo_nsi не затрагиваются.
+       -------------------------------------------------------- */
+
+    FOR r IN
+
+        SELECT id
+        FROM normalization."OT_Truboprovod_P_ready"
+
+    LOOP
+
+        PERFORM dblink_exec
+        (
+            v_conn,
+
+            format
+            (
+                'DELETE FROM public."CompositionOfLinearObjectPipelines"
+                 WHERE id = %L::uuid',
+                r.id
+            )
+        );
+
+
+        PERFORM dblink_exec
+        (
+            v_conn,
+
+            format
+            (
+                'DELETE FROM public."CompositionOfLinerObjectPikets"
+                 WHERE id = %L::uuid',
+                r.id
+            )
+        );
+
+    END LOOP;
+
+
+    /* --------------------------------------------------------
+       ПИКЕТЫ
+       -------------------------------------------------------- */
+
+    FOR r IN
+
+        SELECT *
+        FROM normalization."OT_Truboprovod_P_nsi_pikets"
+
+    LOOP
+
+        PERFORM dblink_exec
+        (
+            v_conn,
+
+            format
+            (
+                $SQL$
+
+                INSERT INTO public."CompositionOfLinerObjectPikets"
+                (
+                    id,
+                    rasp_piket,
+                    "CreatedAt",
+                    "UpdatedAt",
+                    "IsBlocked"
+                )
+
+                VALUES
+                (
+                    %L::uuid,
+                    %L,
+                    now(),
+                    now(),
+                    false
+                );
+
+                $SQL$,
+
+                r.id,
+                r.rasp_piket
+            )
+        );
+
+    END LOOP;
+
+
+    /* --------------------------------------------------------
+       PIPELINES
+       -------------------------------------------------------- */
+
+    FOR r IN
+
+        SELECT *
+        FROM normalization."OT_Truboprovod_P_nsi_pipelines"
+
+    LOOP
+
+        PERFORM dblink_exec
+        (
+            v_conn,
+
+            format
+            (
+                $SQL$
+
+                INSERT INTO public."CompositionOfLinearObjectPipelines"
+                (
+                    id,
+                    naim_tr,
+                    "CreatedAt",
+                    "UpdatedAt",
+                    "IsBlocked"
+                )
+
+                VALUES
+                (
+                    %L::uuid,
+                    %L::uuid,
+                    now(),
+                    now(),
+                    false
+                );
+
+                $SQL$,
+
+                r.id,
+                r.pipeline_id
+            )
+        );
+
+    END LOOP;
+
+
+    PERFORM dblink_exec(
+        v_conn,
+        'COMMIT'
+    );
+
+
+    PERFORM dblink_disconnect(
+        v_conn
+    );
+
+
+    RAISE NOTICE
+        'neo_nsi успешно синхронизирована.';
+
+EXCEPTION
+
+    WHEN OTHERS THEN
+
+        BEGIN
+            PERFORM dblink_exec(
+                v_conn,
+                'ROLLBACK'
+            );
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_disconnect(
+                v_conn
+            );
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+
+        RAISE;
+
+END $$;
