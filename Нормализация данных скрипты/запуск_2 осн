@@ -1,0 +1,1425 @@
+/* ============================================================
+   01_POINT_PREPARE_CHECK.sql
+
+   ПЕРВЫЙ ЗАПУСК НОВОЙ ПОСТАВКИ
+
+   ЗАПУСКАТЬ В ЛОКАЛЬНОЙ БД.
+
+   ЧТО ДЕЛАЕТ:
+
+     1. проверяет DZO;
+     2. сохраняет входящие id;
+     3. новым объектам без id генерирует UUID;
+     4. определяет SOURCE / GENERATED;
+     5. создаёт локальный READY;
+     6. выполняет безопасную техническую нормализацию;
+     7. читает существующие объекты из bgd_PAO;
+     8. определяет NEW / UPDATE / REVIEW;
+     9. читает PurposesOfPipelineNetworkObjects;
+    10. читает Pipelines;
+    11. выполняет точные сопоставления;
+    12. при точных дублях Pipeline выбирает один UUID;
+    13. для остальных строит fuzzy-кандидатов;
+    14. показывает проблемы.
+
+   НЕ ДЕЛАЕТ:
+
+     - INSERT/UPDATE/DELETE в neo_nsi;
+     - INSERT/UPDATE/DELETE в bgd_PAO;
+     - INSERT/UPDATE/DELETE в bgd_<DZO>.
+   ============================================================ */
+
+
+/* ============================================================
+   1. ПАРАМЕТРЫ ПОДКЛЮЧЕНИЯ
+
+   ЗАМЕНИТЬ параметры соединения.
+
+   Пароли в постоянные таблицы не сохраняем.
+   Эта TEMP-таблица исчезнет после закрытия сессии.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_config;
+
+CREATE TEMP TABLE tmp_point_config
+(
+    neo_nsi_conn text NOT NULL,
+
+    bgd_pao_conn text NOT NULL,
+
+    fuzzy_min double precision NOT NULL,
+
+    fuzzy_top integer NOT NULL
+);
+
+
+INSERT INTO tmp_point_config
+VALUES
+(
+    'host=ХОСТ port=5432 dbname=neo_nsi user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ',
+
+    'host=ХОСТ port=5432 dbname=bgd_PAO user=ПОЛЬЗОВАТЕЛЬ password=ПАРОЛЬ',
+
+    0.35,
+
+    5
+);
+
+
+/* ============================================================
+   2. ПРОВЕРКА: ЕСТЬ ЛИ ДАННЫЕ
+   ============================================================ */
+
+DO $$
+DECLARE
+    v_count bigint;
+BEGIN
+
+    SELECT count(*)
+    INTO v_count
+    FROM public."OT_Truboprovod_P_input";
+
+
+    IF v_count = 0 THEN
+
+        RAISE EXCEPTION
+            'OT_Truboprovod_P_input пуста. Сначала загрузите SHP через QGIS.';
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   3. ПРОВЕРКА DZO
+
+   Неизвестное или NULL DZO блокирует дальнейшую обработку.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_bad_dzo;
+
+CREATE TEMP TABLE tmp_point_bad_dzo AS
+
+SELECT
+    i.id,
+    i.dzo,
+    i.naim,
+    i.naim_tr
+
+FROM public."OT_Truboprovod_P_input" i
+
+LEFT JOIN norm.point_dzo d
+    ON d.dzo = i.dzo
+   AND d.is_active
+
+WHERE i.dzo IS NULL
+   OR d.dzo IS NULL;
+
+
+DO $$
+DECLARE
+    v_count bigint;
+BEGIN
+
+    SELECT count(*)
+    INTO v_count
+    FROM tmp_point_bad_dzo;
+
+
+    IF v_count > 0 THEN
+
+        RAISE EXCEPTION
+            'Обнаружено строк с пустым/неизвестным DZO: %. Посмотрите tmp_point_bad_dzo.',
+            v_count;
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   4. ФИКСИРУЕМ ПРОИСХОЖДЕНИЕ ID
+
+   Если id уже был:
+       SOURCE
+
+   Если id NULL:
+       сначала помечаем GENERATED,
+       затем создаём UUID.
+
+   При повторном запуске значение уже не меняется.
+   ============================================================ */
+
+UPDATE public."OT_Truboprovod_P_input"
+SET id_origin = 'SOURCE'
+WHERE id IS NOT NULL
+  AND id_origin IS NULL;
+
+
+UPDATE public."OT_Truboprovod_P_input"
+SET
+    id = uuid_generate_v4(),
+    id_origin = 'GENERATED'
+WHERE id IS NULL;
+
+
+/* ============================================================
+   5. ПРОВЕРЯЕМ ДУБЛИ ID ВНУТРИ ПОСТАВКИ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_duplicate_ids;
+
+CREATE TEMP TABLE tmp_point_duplicate_ids AS
+
+SELECT
+    id,
+    count(*) AS rows_count
+
+FROM public."OT_Truboprovod_P_input"
+
+GROUP BY id
+
+HAVING count(*) > 1;
+
+
+DO $$
+DECLARE
+    v_count bigint;
+BEGIN
+
+    SELECT count(*)
+    INTO v_count
+    FROM tmp_point_duplicate_ids;
+
+
+    IF v_count > 0 THEN
+
+        RAISE EXCEPTION
+            'В поставке есть повторяющиеся id. Посмотрите tmp_point_duplicate_ids.';
+
+    END IF;
+
+END $$;
+
+
+/* ============================================================
+   6. СОЗДАЁМ READY ИЗ INPUT
+
+   INPUT дальше не нормализуем.
+
+   Все изменения выполняются только в READY.
+   ============================================================ */
+
+TRUNCATE TABLE ready."OT_Truboprovod_P_klass_prav";
+
+
+INSERT INTO ready."OT_Truboprovod_P_klass_prav"
+(
+    id,
+    geom,
+    class_code,
+    class_name,
+    naim_tr,
+    naim,
+    rasp_piket,
+    funk_nazn,
+    teh_hrkt,
+    primechan,
+    dzo
+)
+
+SELECT
+    id,
+    geom,
+    class_code,
+    class_name,
+    naim_tr,
+    naim,
+    rasp_piket,
+    funk_nazn,
+    teh_hrkt,
+    primechan,
+    dzo
+
+FROM public."OT_Truboprovod_P_input";
+
+
+/* ============================================================
+   7. УНИВЕРСАЛЬНАЯ ТЕХНИЧЕСКАЯ ОЧИСТКА
+
+   Здесь только безопасные операции.
+   ============================================================ */
+
+
+/* ---------- Enter / Tab / повторные пробелы ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET
+    class_name = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(class_name, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    naim_tr = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(naim_tr, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    naim = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(naim, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    rasp_piket = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(rasp_piket, E'[\r\t]+', ' ', 'g'),
+                '[ ]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    funk_nazn = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(funk_nazn, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    teh_hrkt = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(teh_hrkt, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    ),
+
+    primechan = NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(primechan, E'[\r\n\t]+', ' ', 'g'),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    );
+
+
+/* ---------- служебные "-" и "—" -> NULL ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET
+    class_name =
+        CASE WHEN class_name IN ('-', '—') THEN NULL ELSE class_name END,
+
+    naim_tr =
+        CASE WHEN naim_tr IN ('-', '—') THEN NULL ELSE naim_tr END,
+
+    naim =
+        CASE WHEN naim IN ('-', '—') THEN NULL ELSE naim END,
+
+    rasp_piket =
+        CASE WHEN rasp_piket IN ('-', '—') THEN NULL ELSE rasp_piket END,
+
+    funk_nazn =
+        CASE WHEN funk_nazn IN ('-', '—') THEN NULL ELSE funk_nazn END,
+
+    teh_hrkt =
+        CASE WHEN teh_hrkt IN ('-', '—') THEN NULL ELSE teh_hrkt END,
+
+    primechan =
+        CASE WHEN primechan IN ('-', '—') THEN NULL ELSE primechan END;
+
+
+/* ---------- внешние двойные кавычки ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET
+    naim_tr = btrim(naim_tr, '"'),
+    naim = btrim(naim, '"'),
+    funk_nazn = btrim(funk_nazn, '"'),
+    teh_hrkt = btrim(teh_hrkt, '"');
+
+
+/* ---------- заглавная первая буква ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET naim =
+    upper(left(naim, 1))
+    || substring(naim, 2)
+
+WHERE naim ~ '^[а-яё]';
+
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET funk_nazn =
+    upper(left(funk_nazn, 1))
+    || substring(funk_nazn, 2)
+
+WHERE funk_nazn ~ '^[а-яё]';
+
+
+/* ---------- teh_hrkt ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET teh_hrkt =
+    replace(
+        replace(
+            teh_hrkt,
+            'Ленейный',
+            'Линейный'
+        ),
+        'Pу',
+        'Ру'
+    )
+
+WHERE teh_hrkt IS NOT NULL;
+
+
+/* ---------- лишняя запятая в конце ---------- */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+
+SET teh_hrkt =
+    regexp_replace(
+        teh_hrkt,
+        ',\s*$',
+        ''
+    )
+
+WHERE teh_hrkt ~ ',\s*$';
+
+
+/* ============================================================
+   8. БАЗОВАЯ НОРМАЛИЗАЦИЯ ПИКЕТОВ
+   ============================================================ */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket = replace(rasp_piket, '.', ',')
+WHERE rasp_piket IS NOT NULL;
+
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        E'[\n]+',
+        '; ',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '\s+[Ии]\s+',
+        '; ',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* П12 -> ПК12 */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        'П(\d+)',
+        'ПК\1',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* ПК12 -> ПК12+00 */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '(^|;\s*)(ПК\d+)(?=;|$)',
+        '\1\2+00',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* ПК12+0 -> ПК12+00 */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '\+0(?=\D|$)',
+        '+00',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* Убираем пробелы внутри ПК */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '(ПК)\s*(\d+)\s*\+\s*(\d+)',
+        '\1\2+\3',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* 12+50 -> ПК12+50 */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '^(\d+\+\d+)',
+        'ПК\1'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* ПК12-15 -> ПК12+00; ПК15+00 */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '(ПК\s*\d+)-(\d+)',
+        '\1+00; ПК\2+00',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* разделитель / или - между полноценными пикетами */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '(ПК\d+(?:\+\d+)?(?:,\d+)?)\s*[/-]\s*(?:ПК)?(\d+(?:\+\d+)?(?:,\d+)?)',
+        '\1; ПК\2',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* Приводим ; к единому виду */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav"
+SET rasp_piket =
+    regexp_replace(
+        rasp_piket,
+        '\s*;\s*',
+        '; ',
+        'g'
+    )
+WHERE rasp_piket IS NOT NULL;
+
+
+/* ============================================================
+   9. КЛАССЫ
+   ============================================================ */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav" s
+
+SET
+    class_name = m.class_name,
+    class_code = m.class_code
+
+FROM norm.point_class_map m
+
+WHERE m.is_active
+
+  AND norm.text_key(s.class_name)
+      = norm.text_key(m.class_name);
+
+
+/* ============================================================
+   10. ПОДКЛЮЧЕНИЕ К bgd_PAO
+   ============================================================ */
+
+SELECT dblink_connect(
+    'point_bgd_pao',
+    (
+        SELECT bgd_pao_conn
+        FROM tmp_point_config
+        LIMIT 1
+    )
+);
+
+
+/* ============================================================
+   11. КОПИРУЕМ СУЩЕСТВУЮЩИЕ ТОЧКИ bgd_PAO ЛОКАЛЬНО
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_bgd_pao;
+
+CREATE TEMP TABLE tmp_point_bgd_pao AS
+
+SELECT *
+
+FROM dblink(
+    'point_bgd_pao',
+    '
+        SELECT
+            id,
+            geom,
+            class_code,
+            class_name,
+            naim_tr,
+            naim,
+            rasp_piket,
+            funk_nazn,
+            teh_hrkt,
+            primechan
+        FROM public."OT_Truboprovod_P"
+    '
+)
+
+AS x
+(
+    id uuid,
+
+    geom geometry(Point,3857),
+
+    class_code varchar(10),
+
+    class_name varchar(100),
+
+    naim_tr text,
+
+    naim varchar(255),
+
+    rasp_piket text,
+
+    funk_nazn varchar(255),
+
+    teh_hrkt text,
+
+    primechan text
+);
+
+
+SELECT dblink_disconnect('point_bgd_pao');
+
+
+/* ============================================================
+   12. КЛАССИФИКАЦИЯ NEW / UPDATE / REVIEW
+
+   GENERATED:
+       новый объект.
+
+   SOURCE + id найден:
+       существующий объект -> UPDATE.
+
+   SOURCE + id НЕ найден:
+       REVIEW.
+
+   Такой объект автоматически новым не считаем.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_operation;
+
+CREATE TEMP TABLE tmp_point_operation AS
+
+SELECT
+    i.id,
+
+    i.id_origin,
+
+    i.dzo,
+
+    CASE
+
+        WHEN i.id_origin = 'GENERATED'
+         AND b.id IS NULL
+            THEN 'NEW'
+
+        WHEN i.id_origin = 'GENERATED'
+         AND b.id IS NOT NULL
+            THEN 'GENERATED_ID_COLLISION'
+
+        WHEN i.id_origin = 'SOURCE'
+         AND b.id IS NOT NULL
+            THEN 'UPDATE'
+
+        WHEN i.id_origin = 'SOURCE'
+         AND b.id IS NULL
+            THEN 'REVIEW_UNKNOWN_ID'
+
+        ELSE 'REVIEW'
+
+    END AS operation
+
+FROM public."OT_Truboprovod_P_input" i
+
+LEFT JOIN tmp_point_bgd_pao b
+    ON b.id = i.id;
+
+
+/* ============================================================
+   13. ПОКАЗЫВАЕМ, ЧТО ИМЕННО ИЗМЕНИЛОСЬ У UPDATE
+
+   Это очень важный контроль для изменённых объектов.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_update_diff;
+
+CREATE TEMP TABLE tmp_point_update_diff AS
+
+SELECT
+    n.id,
+
+    n.dzo,
+
+    b.naim AS old_naim,
+    n.naim AS new_naim,
+
+    b.naim_tr AS old_naim_tr,
+    n.naim_tr AS new_naim_tr,
+
+    b.rasp_piket AS old_rasp_piket,
+    n.rasp_piket AS new_rasp_piket,
+
+    b.funk_nazn AS old_funk_nazn,
+    n.funk_nazn AS new_funk_nazn,
+
+    b.teh_hrkt AS old_teh_hrkt,
+    n.teh_hrkt AS new_teh_hrkt,
+
+    b.primechan AS old_primechan,
+    n.primechan AS new_primechan,
+
+    ST_Equals(
+        b.geom,
+        n.geom
+    ) AS geometry_equal
+
+FROM ready."OT_Truboprovod_P_klass_prav" n
+
+JOIN tmp_point_operation o
+    ON o.id = n.id
+   AND o.operation = 'UPDATE'
+
+JOIN tmp_point_bgd_pao b
+    ON b.id = n.id
+
+WHERE
+       b.naim IS DISTINCT FROM n.naim
+
+    OR b.naim_tr IS DISTINCT FROM n.naim_tr
+
+    OR b.rasp_piket IS DISTINCT FROM n.rasp_piket
+
+    OR b.funk_nazn IS DISTINCT FROM n.funk_nazn
+
+    OR b.teh_hrkt IS DISTINCT FROM n.teh_hrkt
+
+    OR b.primechan IS DISTINCT FROM n.primechan
+
+    OR NOT ST_Equals(b.geom, n.geom);
+
+
+/* ============================================================
+   14. ПОДКЛЮЧЕНИЕ К neo_nsi
+   ============================================================ */
+
+SELECT dblink_connect(
+    'point_neo_nsi',
+    (
+        SELECT neo_nsi_conn
+        FROM tmp_point_config
+        LIMIT 1
+    )
+);
+
+
+/* ============================================================
+   15. СПРАВОЧНИК funk_nazn
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_nsi_purposes;
+
+CREATE TEMP TABLE tmp_point_nsi_purposes AS
+
+SELECT
+    x.id,
+    x.naim,
+
+    norm.text_key(x.naim) AS match_key
+
+FROM dblink(
+    'point_neo_nsi',
+    '
+        SELECT
+            id,
+            naim::text
+        FROM public."PurposesOfPipelineNetworkObjects"
+    '
+)
+
+AS x
+(
+    id uuid,
+    naim text
+);
+
+
+/* ============================================================
+   16. PIPELINES
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_nsi_pipelines;
+
+CREATE TEMP TABLE tmp_point_nsi_pipelines AS
+
+SELECT
+    x.id,
+    x.naim_tr,
+
+    norm.text_key(x.naim_tr) AS match_key
+
+FROM dblink(
+    'point_neo_nsi',
+    '
+        SELECT
+            id,
+            naim_tr::text
+        FROM public."Pipelines"
+        WHERE naim_tr IS NOT NULL
+    '
+)
+
+AS x
+(
+    id uuid,
+    naim_tr text
+);
+
+
+SELECT dblink_disconnect('point_neo_nsi');
+
+
+/* ============================================================
+   17. УНИКАЛЬНЫЕ funk_nazn ПО ПОСТАВКЕ
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_values;
+
+CREATE TEMP TABLE tmp_point_purpose_values AS
+
+SELECT
+    dzo,
+
+    norm.text_key(funk_nazn)
+        AS source_key,
+
+    min(funk_nazn)
+        AS source_value,
+
+    count(*)
+        AS objects_count
+
+FROM ready."OT_Truboprovod_P_klass_prav"
+
+WHERE funk_nazn IS NOT NULL
+
+GROUP BY
+    dzo,
+    norm.text_key(funk_nazn);
+
+
+/* ============================================================
+   18. ТОЧНОЕ СОПОСТАВЛЕНИЕ funk_nazn
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_resolution;
+
+CREATE TEMP TABLE tmp_point_purpose_resolution AS
+
+SELECT
+    v.dzo,
+
+    v.source_key,
+
+    v.source_value,
+
+    v.objects_count,
+
+    count(p.id)
+        AS exact_count,
+
+    min(p.id::text)::uuid
+        AS selected_purpose_id,
+
+    CASE
+
+        WHEN count(p.id) = 1
+            THEN 'EXACT'
+
+        WHEN count(p.id) > 1
+            THEN 'EXACT_DUPLICATE'
+
+        ELSE 'UNRESOLVED'
+
+    END AS resolution_method
+
+FROM tmp_point_purpose_values v
+
+LEFT JOIN tmp_point_nsi_purposes p
+    ON p.match_key = v.source_key
+
+GROUP BY
+    v.dzo,
+    v.source_key,
+    v.source_value,
+    v.objects_count;
+
+
+/* ============================================================
+   19. КАНОНИЧЕСКОЕ funk_nazn
+   ============================================================ */
+
+UPDATE ready."OT_Truboprovod_P_klass_prav" r
+
+SET funk_nazn = n.naim
+
+FROM tmp_point_purpose_resolution x
+
+JOIN tmp_point_nsi_purposes n
+    ON n.id = x.selected_purpose_id
+
+WHERE r.dzo = x.dzo
+
+  AND norm.text_key(r.funk_nazn)
+      = x.source_key
+
+  AND x.resolution_method IN
+      (
+          'EXACT',
+          'EXACT_DUPLICATE'
+      );
+
+
+/* ============================================================
+   20. РАЗБИВАЕМ naim_tr ПО ";"
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_parts;
+
+CREATE TEMP TABLE tmp_point_pipeline_parts AS
+
+SELECT
+    r.id,
+
+    r.dzo,
+
+    x.ordinality::integer
+        AS part_no,
+
+    btrim(x.pipeline_name)
+        AS source_value,
+
+    norm.text_key(
+        btrim(x.pipeline_name)
+    ) AS source_key
+
+FROM ready."OT_Truboprovod_P_klass_prav" r
+
+CROSS JOIN LATERAL
+
+    unnest(
+        string_to_array(
+            r.naim_tr,
+            ';'
+        )
+    )
+
+WITH ORDINALITY AS x
+(
+    pipeline_name,
+    ordinality
+)
+
+WHERE r.naim_tr IS NOT NULL
+
+  AND NULLIF(
+        btrim(x.pipeline_name),
+        ''
+      ) IS NOT NULL;
+
+
+/* ============================================================
+   21. ТОЧНОЕ СОПОСТАВЛЕНИЕ PIPELINES
+
+   При нескольких одинаковых названиях:
+       автоматически выбираем минимальный UUID.
+
+   Это сохраняет старую бизнес-логику,
+   но теперь выбор стабильный.
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_resolution;
+
+CREATE TEMP TABLE tmp_point_pipeline_resolution AS
+
+SELECT
+    p.dzo,
+
+    p.source_key,
+
+    min(p.source_value)
+        AS source_value,
+
+    count(DISTINCT p.id)
+        AS objects_count,
+
+    count(n.id)
+        AS exact_count,
+
+    min(n.id::text)::uuid
+        AS selected_pipeline_id,
+
+    CASE
+
+        WHEN count(n.id) = 1
+            THEN 'EXACT'
+
+        WHEN count(n.id) > 1
+            THEN 'EXACT_DUPLICATE'
+
+        ELSE 'UNRESOLVED'
+
+    END AS resolution_method
+
+FROM
+(
+    SELECT DISTINCT
+        id,
+        dzo,
+        source_key,
+        source_value
+
+    FROM tmp_point_pipeline_parts
+) p
+
+LEFT JOIN tmp_point_nsi_pipelines n
+    ON n.match_key = p.source_key
+
+GROUP BY
+    p.dzo,
+    p.source_key;
+
+
+/* ============================================================
+   22. FUZZY-КАНДИДАТЫ funk_nazn
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_purpose_candidates;
+
+CREATE TEMP TABLE tmp_point_purpose_candidates AS
+
+SELECT
+    u.dzo,
+
+    u.source_value,
+
+    u.objects_count,
+
+    c.candidate_rank,
+
+    c.candidate_id,
+
+    c.candidate_value,
+
+    round(
+        c.similarity_value::numeric,
+        4
+    ) AS similarity_value
+
+FROM tmp_point_purpose_resolution u
+
+JOIN LATERAL
+(
+    SELECT
+        n.id AS candidate_id,
+
+        n.naim AS candidate_value,
+
+        similarity(
+            u.source_key,
+            n.match_key
+        ) AS similarity_value,
+
+        row_number() OVER
+        (
+            ORDER BY
+                similarity(
+                    u.source_key,
+                    n.match_key
+                ) DESC,
+
+                n.id::text
+        ) AS candidate_rank
+
+    FROM tmp_point_nsi_purposes n
+
+    WHERE similarity(
+        u.source_key,
+        n.match_key
+    ) >=
+    (
+        SELECT fuzzy_min
+        FROM tmp_point_config
+    )
+
+    ORDER BY
+        similarity_value DESC,
+        n.id::text
+
+    LIMIT
+    (
+        SELECT fuzzy_top
+        FROM tmp_point_config
+    )
+
+) c ON true
+
+WHERE u.resolution_method = 'UNRESOLVED';
+
+
+/* ============================================================
+   23. FUZZY-КАНДИДАТЫ PIPELINES
+   ============================================================ */
+
+DROP TABLE IF EXISTS tmp_point_pipeline_candidates;
+
+CREATE TEMP TABLE tmp_point_pipeline_candidates AS
+
+SELECT
+    u.dzo,
+
+    u.source_value,
+
+    u.objects_count,
+
+    c.candidate_rank,
+
+    c.candidate_id,
+
+    c.candidate_value,
+
+    round(
+        c.similarity_value::numeric,
+        4
+    ) AS similarity_value
+
+FROM tmp_point_pipeline_resolution u
+
+JOIN LATERAL
+(
+    SELECT
+        n.id AS candidate_id,
+
+        n.naim_tr AS candidate_value,
+
+        similarity(
+            u.source_key,
+            n.match_key
+        ) AS similarity_value,
+
+        row_number() OVER
+        (
+            ORDER BY
+                similarity(
+                    u.source_key,
+                    n.match_key
+                ) DESC,
+
+                n.id::text
+        ) AS candidate_rank
+
+    FROM tmp_point_nsi_pipelines n
+
+    WHERE similarity(
+        u.source_key,
+        n.match_key
+    ) >=
+    (
+        SELECT fuzzy_min
+        FROM tmp_point_config
+    )
+
+    ORDER BY
+        similarity_value DESC,
+        n.id::text
+
+    LIMIT
+    (
+        SELECT fuzzy_top
+        FROM tmp_point_config
+    )
+
+) c ON true
+
+WHERE u.resolution_method = 'UNRESOLVED';
+
+
+/* ============================================================
+   24. ИТОГ №1 — NEW / UPDATE / REVIEW
+   ============================================================ */
+
+SELECT
+    operation,
+    count(*) AS objects_count
+
+FROM tmp_point_operation
+
+GROUP BY operation
+
+ORDER BY operation;
+
+
+/* ============================================================
+   25. ИТОГ №2 — НЕИЗВЕСТНЫЕ ВХОДЯЩИЕ ID
+
+   Такие строки пока требуют решения.
+   ============================================================ */
+
+SELECT
+    r.*
+
+FROM ready."OT_Truboprovod_P_klass_prav" r
+
+JOIN tmp_point_operation o
+    ON o.id = r.id
+
+WHERE o.operation IN
+(
+    'REVIEW_UNKNOWN_ID',
+    'GENERATED_ID_COLLISION',
+    'REVIEW'
+)
+
+ORDER BY
+    r.dzo,
+    r.id;
+
+
+/* ============================================================
+   26. ИТОГ №3 — ЧТО ИЗМЕНИЛОСЬ У СУЩЕСТВУЮЩИХ ОБЪЕКТОВ
+   ============================================================ */
+
+SELECT *
+FROM tmp_point_update_diff
+
+ORDER BY
+    dzo,
+    id;
+
+
+/* ============================================================
+   27. ИТОГ №4 — funk_nazn БЕЗ ТОЧНОГО СООТВЕТСТВИЯ
+   ============================================================ */
+
+SELECT
+    dzo,
+    source_value,
+    objects_count
+
+FROM tmp_point_purpose_resolution
+
+WHERE resolution_method = 'UNRESOLVED'
+
+ORDER BY
+    objects_count DESC,
+    source_value;
+
+
+/* ============================================================
+   28. ИТОГ №5 — КАНДИДАТЫ funk_nazn
+   ============================================================ */
+
+SELECT *
+FROM tmp_point_purpose_candidates
+
+ORDER BY
+    objects_count DESC,
+    source_value,
+    candidate_rank;
+
+
+/* ============================================================
+   29. ИТОГ №6 — naim_tr БЕЗ ТОЧНОГО СООТВЕТСТВИЯ
+   ============================================================ */
+
+SELECT
+    dzo,
+    source_value,
+    objects_count
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method = 'UNRESOLVED'
+
+ORDER BY
+    objects_count DESC,
+    source_value;
+
+
+/* ============================================================
+   30. ИТОГ №7 — КАНДИДАТЫ PIPELINES
+   ============================================================ */
+
+SELECT *
+FROM tmp_point_pipeline_candidates
+
+ORDER BY
+    objects_count DESC,
+    source_value,
+    candidate_rank;
+
+
+/* ============================================================
+   31. ИТОГ №8 — ТОЧНЫЕ ДУБЛИ PIPELINES
+
+   Это НЕ ошибка.
+
+   selected_pipeline_id уже выбран автоматически.
+   ============================================================ */
+
+SELECT
+    dzo,
+    source_value,
+    objects_count,
+    exact_count,
+    selected_pipeline_id
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method = 'EXACT_DUPLICATE'
+
+ORDER BY
+    objects_count DESC,
+    source_value;
+
+
+/* ============================================================
+   32. ИТОГ №9 — ПОДОЗРИТЕЛЬНЫЕ ПИКЕТЫ
+   ============================================================ */
+
+SELECT
+    id,
+    dzo,
+    naim,
+    rasp_piket
+
+FROM ready."OT_Truboprovod_P_klass_prav"
+
+WHERE rasp_piket IS NOT NULL
+
+  AND
+  (
+       rasp_piket ~ E'[\r\n\t]'
+
+    OR rasp_piket ~ '/'
+
+    OR rasp_piket ~ '\s{2,}'
+
+    OR rasp_piket !~
+       '^ПК\d+\+\d+(?:,\d+)?(?:;\s*ПК\d+\+\d+(?:,\d+)?)*$'
+  )
+
+ORDER BY
+    dzo,
+    id;
+
+
+/* ============================================================
+   33. ОБЩАЯ СТАТИСТИКА
+   ============================================================ */
+
+SELECT
+
+    (
+        SELECT count(*)
+        FROM ready."OT_Truboprovod_P_klass_prav"
+    ) AS total_objects,
+
+    (
+        SELECT count(*)
+        FROM tmp_point_operation
+        WHERE operation = 'NEW'
+    ) AS new_objects,
+
+    (
+        SELECT count(*)
+        FROM tmp_point_operation
+        WHERE operation = 'UPDATE'
+    ) AS update_objects,
+
+    (
+        SELECT count(*)
+        FROM tmp_point_operation
+        WHERE operation LIKE 'REVIEW%'
+    ) AS review_id_objects,
+
+    (
+        SELECT count(*)
+        FROM tmp_point_purpose_resolution
+        WHERE resolution_method = 'UNRESOLVED'
+    ) AS unresolved_purposes,
+
+    (
+        SELECT count(*)
+        FROM tmp_point_pipeline_resolution
+        WHERE resolution_method = 'UNRESOLVED'
+    ) AS unresolved_pipelines;
