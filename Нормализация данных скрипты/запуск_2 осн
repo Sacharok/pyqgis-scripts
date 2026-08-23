@@ -3195,21 +3195,123 @@ WHERE resolution_method =
 
 
 /* ============================================================
-   41. ДУБЛИ PIPELINES
-
-   Это НЕ ошибка.
-
-   Возможны два варианта:
-
-   EXACT_DUPLICATE
-       несколько абсолютно одинаковых naim_tr.
-
-   TECHNICAL_EXACT_DUPLICATE
-       исходные строки отличаются оформлением,
-       но после технической нормализации считаются одинаковыми.
-
-   В обоих случаях автоматически выбирается один UUID.
+   41. ПРОБЛЕМЫ PIPELINES
    ============================================================ */
+
+
+/* ------------------------------------------------------------
+   41.1. naim_tr вообще не заполнено
+   ------------------------------------------------------------ */
+
+INSERT INTO normalization."OT_Truboprovod_P_issues"
+(
+    severity,
+    issue_type,
+    object_id,
+    dzo,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+    'REVIEW',
+    'PIPELINE_NULL',
+    id,
+    dzo,
+    'naim_tr',
+    NULL,
+    'Не указано наименование трубопровода'
+
+FROM normalization."OT_Truboprovod_P_ready"
+
+WHERE naim_tr IS NULL;
+
+
+/* ------------------------------------------------------------
+   41.2. Трубопровод не удалось сопоставить
+
+   Сюда попадут только те значения, для которых не сработали:
+
+       SAVED
+       EXACT
+       EXACT_DUPLICATE
+       TECHNICAL_EXACT
+       TECHNICAL_EXACT_DUPLICATE
+       FUZZY_AUTO
+
+   FUZZY_AUTO пока отключён в настройках.
+   ------------------------------------------------------------ */
+
+INSERT INTO normalization."OT_Truboprovod_P_issues"
+(
+    severity,
+    issue_type,
+    dzo,
+    field_name,
+    source_value,
+    details
+)
+
+SELECT
+
+    CASE
+        WHEN resolution_method = 'SAVED_TARGET_MISSING'
+            THEN 'ERROR'
+        ELSE
+            'REVIEW'
+    END,
+
+    CASE
+        WHEN resolution_method = 'SAVED_TARGET_MISSING'
+            THEN 'PIPELINE_SAVED_TARGET_MISSING'
+        ELSE
+            'PIPELINE_UNRESOLVED'
+    END,
+
+    dzo,
+
+    'naim_tr',
+
+    source_value,
+
+    CASE
+
+        WHEN resolution_method = 'SAVED_TARGET_MISSING'
+        THEN
+            'Сохранённый ранее Pipeline UUID отсутствует в neo_nsi. Объектов: '
+            || objects_count
+
+        ELSE
+            'Точного или технически точного соответствия нет. Объектов: '
+            || objects_count
+            || '. Посмотреть OT_Truboprovod_P_candidates.'
+
+    END
+
+FROM tmp_point_pipeline_resolution
+
+WHERE resolution_method IN
+(
+    'UNRESOLVED',
+    'SAVED_TARGET_MISSING'
+);
+
+
+/* ------------------------------------------------------------
+   41.3. Дубли Pipelines
+
+   Это НЕ ошибка и загрузку не блокирует.
+
+   EXACT_DUPLICATE:
+       в Pipelines несколько абсолютно одинаковых названий.
+
+   TECHNICAL_EXACT_DUPLICATE:
+       несколько названий стали одинаковыми после безопасной
+       технической нормализации.
+
+   В обоих случаях один UUID выбирается автоматически.
+   ------------------------------------------------------------ */
 
 INSERT INTO normalization."OT_Truboprovod_P_issues"
 (
@@ -3225,10 +3327,13 @@ SELECT
     'WARNING',
 
     CASE
+
         WHEN resolution_method = 'EXACT_DUPLICATE'
             THEN 'PIPELINE_EXACT_DUPLICATE'
+
         ELSE
             'PIPELINE_TECHNICAL_DUPLICATE'
+
     END,
 
     dzo,
