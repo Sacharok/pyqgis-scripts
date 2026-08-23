@@ -545,6 +545,12 @@ END $$;
    ============================================================ */
 
 TRUNCATE TABLE
+normalization."OT_Truboprovod_P_pipeline_resolution";
+
+TRUNCATE TABLE
+normalization."OT_Truboprovod_P_purpose_resolution";
+
+TRUNCATE TABLE
     normalization."OT_Truboprovod_P_ready";
 
 TRUNCATE TABLE
@@ -2978,6 +2984,99 @@ WHERE
 
   AND c.decision_hint =
       'HIGH_CONFIDENCE';
+
+
+/* ============================================================
+   37.1. СОХРАНЯЕМ РЕЗУЛЬТАТЫ СОПОСТАВЛЕНИЯ
+
+   После этого результат больше не зависит от TEMP-сессии.
+   Его всегда можно открыть в DBeaver.
+   ============================================================ */
+
+
+/* ---------- funk_nazn ---------- */
+
+INSERT INTO
+normalization."OT_Truboprovod_P_purpose_resolution"
+(
+    dzo,
+    source_key,
+    source_value,
+    objects_count,
+    exact_count,
+    selected_purpose_id,
+    selected_purpose_name,
+    resolution_method,
+    checked_at
+)
+
+SELECT
+    r.dzo,
+
+    r.source_key,
+
+    r.source_value,
+
+    r.objects_count::integer,
+
+    r.exact_count::integer,
+
+    r.selected_purpose_id,
+
+    n.naim,
+
+    r.resolution_method,
+
+    now()
+
+FROM tmp_point_purpose_resolution r
+
+LEFT JOIN tmp_point_nsi_purposes n
+    ON n.id = r.selected_purpose_id;
+
+
+/* ---------- naim_tr ---------- */
+
+INSERT INTO
+normalization."OT_Truboprovod_P_pipeline_resolution"
+(
+    dzo,
+    source_key,
+    source_value,
+    objects_count,
+    exact_count,
+    technical_count,
+    selected_pipeline_id,
+    selected_pipeline_name,
+    resolution_method,
+    checked_at
+)
+
+SELECT
+    r.dzo,
+
+    r.source_key,
+
+    r.source_value,
+
+    r.objects_count::integer,
+
+    r.exact_count::integer,
+
+    r.technical_count::integer,
+
+    r.selected_pipeline_id,
+
+    n.naim_tr,
+
+    r.resolution_method,
+
+    now()
+
+FROM tmp_point_pipeline_resolution r
+
+LEFT JOIN tmp_point_nsi_pipelines n
+    ON n.id = r.selected_pipeline_id;
 
 
 /* ============================================================
