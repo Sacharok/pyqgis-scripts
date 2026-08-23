@@ -1,68 +1,61 @@
 /* ============================================================
-   00_SETUP_POINT.sql
+   00_SETUP
+   ЛОКАЛЬНАЯ СИСТЕМА НОРМАЛИЗАЦИИ
 
-   НАСТРОЙКА ЛОКАЛЬНОЙ СИСТЕМЫ НОРМАЛИЗАЦИИ
-   ТРУБОПРОВОДЫ — ТОЧЕЧНЫЕ ОБЪЕКТЫ (P)
+   Все постоянные рабочие таблицы находятся
+   в одной схеме:
+       normalization
 
-   Выполняется ОДИН РАЗ в локальной PostgreSQL.
+   Этот скрипт выполняется ОДИН РАЗ.
 
-   Создаёт:
-     1. входную таблицу для загрузки из QGIS;
-     2. результирующую таблицу READY;
-     3. служебные таблицы накопленных правил;
-     4. список допустимых ДЗО;
-     5. функции для сравнения текста.
-
-   Никаких подключений к удалённым БД здесь нет.
+   Никакие удалённые базы он не изменяет.
    ============================================================ */
 
 
 /* ============================================================
-   0.1. Расширения
-
-   dblink:
-       нужен для чтения neo_nsi / bgd_PAO / bgd_<DZO>.
-
-   pg_trgm:
-       нужен для поиска похожих строк.
-
-   uuid-ossp:
-       нужен для генерации UUID новым объектам.
+   1. СХЕМА
    ============================================================ */
 
-CREATE EXTENSION IF NOT EXISTS dblink;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE SCHEMA IF NOT EXISTS normalization;
+
+COMMENT ON SCHEMA normalization IS
+'Локальная схема подготовки и нормализации пространственных данных перед загрузкой в neo_nsi и BGD. Здесь хранятся исходные поставки, нормализованные данные, результаты проверок и накопленные правила.';
 
 
 /* ============================================================
-   0.2. Служебные схемы
+   2. ПРОВЕРЯЕМ НЕОБХОДИМЫЕ РАСШИРЕНИЯ
+
+   dblink  — работа с удалёнными PostgreSQL.
+   pg_trgm — поиск похожих текстовых значений.
+
+   gen_random_uuid() уже доступен отдельно.
    ============================================================ */
 
-CREATE SCHEMA IF NOT EXISTS norm;
-CREATE SCHEMA IF NOT EXISTS ready;
+SELECT
+    extname
+FROM pg_extension
+WHERE extname IN
+(
+    'dblink',
+    'pg_trgm'
+)
+ORDER BY extname;
 
 
 /* ============================================================
-   0.3. Функция для сравнения текста
+   3. ФУНКЦИЯ ПОДГОТОВКИ ТЕКСТА ДЛЯ СРАВНЕНИЯ
 
-   ВАЖНО:
-   это НЕ окончательная нормализация строки.
+   Она НЕ изменяет данные.
 
-   Функция делает только технический ключ,
-   чтобы одинаковые по смыслу строки можно было сравнить:
-
-       - переводит в нижний регистр;
-       - ё -> е;
-       - Enter / Tab -> пробел;
-       - неразрывный пробел -> обычный;
-       - несколько пробелов -> один;
-       - trim.
-
-   Исходный текст эта функция не изменяет.
+   Используется только для поиска совпадений:
+   - нижний регистр;
+   - ё -> е;
+   - Enter/TAB -> пробел;
+   - несколько пробелов -> один;
+   - trim.
    ============================================================ */
 
-CREATE OR REPLACE FUNCTION norm.text_key(p_text text)
+CREATE OR REPLACE FUNCTION normalization.text_key(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -70,7 +63,9 @@ PARALLEL SAFE
 AS $$
 SELECT
     CASE
-        WHEN p_text IS NULL THEN NULL
+
+        WHEN p_text IS NULL
+            THEN NULL
 
         ELSE replace(
             lower(
@@ -95,158 +90,331 @@ SELECT
             'ё',
             'е'
         )
+
     END;
 $$;
 
-
-/* ============================================================
-   0.4. ВХОДНАЯ ТАБЛИЦА
-
-   Именно сюда загружаем SHP через QGIS.
-
-   ВАЖНО:
-   id НЕ имеет DEFAULT uuid_generate_v4().
-
-   Это принципиально.
-
-   Если объект пришёл:
-       с id    -> сохраняем его;
-       без id  -> 01_PREPARE_CHECK создаст UUID.
-
-   id_origin:
-       SOURCE    - id пришёл из исходного файла;
-       GENERATED - id создан нами.
-
-   dzo:
-       обязательно заполняем перед запуском нормализации.
-
-   naim_tr и rasp_piket сразу TEXT.
-   ============================================================ */
-
-CREATE TABLE IF NOT EXISTS public."OT_Truboprovod_P_input"
-(
-    id uuid NULL,
-
-    id_origin varchar(12) NULL,
-
-    geom geometry(Point, 3857) NULL,
-
-    class_code varchar(10) NULL,
-
-    class_name varchar(100) NULL,
-
-    naim_tr text NULL,
-
-    naim varchar(255) NULL,
-
-    rasp_piket text NULL,
-
-    funk_nazn varchar(255) NULL,
-
-    teh_hrkt text NULL,
-
-    primechan text NULL,
-
-    dzo varchar(8) NULL
-);
+COMMENT ON FUNCTION normalization.text_key(text) IS
+'Формирует технический ключ для сравнения текстов. Исходное значение не изменяет.';
 
 
 /* ============================================================
-   0.5. РЕЗУЛЬТАТ НОРМАЛИЗАЦИИ
+   4. СПИСОК ДЗО
 
-   Это таблица, которая заменяет старую:
-       OT_Truboprovod_P_klass_prav
-
-   Но теперь:
-       naim_tr    = TEXT
-       rasp_piket = TEXT
-
-   project_id здесь специально отсутствует.
-
-   Он будет определяться только при публикации
-   в конкретную BGD.
+   Таблица общая.
+   В будущем используется и для точек, и для линий,
+   и для площадных объектов.
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS ready."OT_Truboprovod_P_klass_prav"
-(
-    id uuid NOT NULL,
-
-    geom geometry(Point, 3857) NULL,
-
-    class_code varchar(10) NULL,
-
-    class_name varchar(100) NULL,
-
-    naim_tr text NULL,
-
-    naim varchar(255) NULL,
-
-    rasp_piket text NULL,
-
-    funk_nazn varchar(255) NULL,
-
-    teh_hrkt text NULL,
-
-    primechan text NULL,
-
-    dzo varchar(8) NULL,
-
-    CONSTRAINT "OT_Truboprovod_P_klass_prav_pkey"
-        PRIMARY KEY (id)
-);
-
-
-/* ============================================================
-   0.6. ДОПУСТИМЫЕ ДЗО
-
-   Здесь храним маршрутизацию.
-
-   В будущем:
-       YGEO -> bgd_YGEO
-       YSPG -> bgd_YSPG
-       и т.д.
-
-   NGAZ_v2 и YGEO_v2 сюда сознательно не включаем.
-   ============================================================ */
-
-CREATE TABLE IF NOT EXISTS norm.point_dzo
+CREATE TABLE IF NOT EXISTS normalization."DZO"
 (
     dzo varchar(8) PRIMARY KEY,
 
     bgd_database text NOT NULL,
 
-    is_active boolean NOT NULL DEFAULT true
+    is_active boolean NOT NULL DEFAULT true,
+
+    description text
 );
 
 
-INSERT INTO norm.point_dzo
+COMMENT ON TABLE normalization."DZO" IS
+'Справочник ДЗО и соответствующих дочерних баз BGD. Используется для маршрутизации объектов при публикации.';
+
+COMMENT ON COLUMN normalization."DZO".dzo IS
+'Код ДЗО, записываемый во входных данных.';
+
+COMMENT ON COLUMN normalization."DZO".bgd_database IS
+'Имя целевой базы данных bgd_<DZO>.';
+
+
+INSERT INTO normalization."DZO"
 (
     dzo,
-    bgd_database
+    bgd_database,
+    description
 )
 VALUES
 
-('AGAZ',  'bgd_AGAZ'),
-('ASPG2', 'bgd_ASPG2'),
-('NGAZ',  'bgd_NGAZ'),
-('TSNG',  'bgd_TSNG'),
-('YGEO',  'bgd_YGEO'),
-('YSPG',  'bgd_YSPG'),
-('YUNG',  'bgd_YUNG')
+('AGAZ',  'bgd_AGAZ',  'Арктикгаз'),
+('ASPG2', 'bgd_ASPG2', NULL),
+('NGAZ',  'bgd_NGAZ',  NULL),
+('TSNG',  'bgd_TSNG',  NULL),
+('YGEO',  'bgd_YGEO',  'ЯРГЕО'),
+('YSPG',  'bgd_YSPG',  NULL),
+('YUNG',  'bgd_YUNG',  NULL)
 
 ON CONFLICT (dzo)
 DO UPDATE SET
-
     bgd_database = EXCLUDED.bgd_database;
 
 
 /* ============================================================
-   0.7. СООТВЕТСТВИЕ КЛАССОВ
+   5. НАСТРОЙКИ ПРОЕКТОВ BGD
 
-   Вместо нескольких UPDATE class_name -> class_code.
+   UUID здесь НЕ храним.
+
+   Мы установили, что один и тот же проект имеет
+   разные Guid в разных BGD.
+
+   Поэтому при публикации ищем Projects.Guid
+   по названию проекта внутри конкретной БД.
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS norm.point_class_map
+CREATE TABLE IF NOT EXISTS normalization."Projects"
+(
+    object_group varchar(100) PRIMARY KEY,
+
+    project_name text NOT NULL,
+
+    is_active boolean NOT NULL DEFAULT true,
+
+    description text
+);
+
+
+COMMENT ON TABLE normalization."Projects" IS
+'Настройки тематических проектов BGD. Хранится название проекта, а конкретный project_id определяется отдельно в каждой целевой базе.';
+
+
+INSERT INTO normalization."Projects"
+(
+    object_group,
+    project_name,
+    description
+)
+VALUES
+(
+    'OT_Truboprovod',
+    'Объекты сбора и транспорта продукции скважин',
+    'Проект для точечных, линейных и площадных объектов трубопроводов.'
+)
+
+ON CONFLICT (object_group)
+DO UPDATE SET
+    project_name = EXCLUDED.project_name,
+    description = EXCLUDED.description;
+
+
+/* ============================================================
+   6. КАНОНИЧЕСКАЯ ВХОДНАЯ ТАБЛИЦА ТОЧЕК
+
+   QGIS сначала загружает SHP в:
+       normalization.OT_Truboprovod_P_import
+
+   Затем 01_PREPARE_CHECK переносит данные сюда.
+
+   Именно здесь:
+   - сохраняется пришедший UUID;
+   - генерируется UUID новым объектам;
+   - фиксируется происхождение UUID;
+   - заполняется DZO.
+
+   Эта таблица относится только к ТЕКУЩЕЙ ПОСТАВКЕ.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_input"
+(
+    id uuid,
+
+    id_origin varchar(12),
+
+    geom geometry(Point,3857),
+
+    class_code varchar(10),
+
+    class_name varchar(100),
+
+    naim_tr text,
+
+    naim varchar(255),
+
+    rasp_piket text,
+
+    funk_nazn varchar(255),
+
+    teh_hrkt text,
+
+    primechan text,
+
+    dzo varchar(8)
+);
+
+
+COMMENT ON TABLE normalization."OT_Truboprovod_P_input" IS
+'Каноническая входная таблица текущей поставки точечных объектов трубопроводов. До нормализации.';
+
+
+COMMENT ON COLUMN normalization."OT_Truboprovod_P_input".id IS
+'Постоянный UUID объекта. Для новых объектов генерируется один раз локально.';
+
+
+COMMENT ON COLUMN normalization."OT_Truboprovod_P_input".id_origin IS
+'SOURCE — UUID пришёл в исходных данных; GENERATED — UUID создан локальной системой нормализации.';
+
+
+COMMENT ON COLUMN normalization."OT_Truboprovod_P_input".dzo IS
+'ДЗО-владелец объекта. Используется для маршрутизации в соответствующую bgd_<DZO>.';
+
+
+/* ============================================================
+   7. ФИНАЛЬНАЯ НОРМАЛИЗОВАННАЯ ТАБЛИЦА
+
+   Именно из неё позже:
+       - создаём SHP сотрудникам;
+       - загружаем данные в neo_nsi;
+       - загружаем данные в BGD.
+
+   project_id здесь НЕ нужен.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_ready"
+(
+    id uuid NOT NULL,
+
+    geom geometry(Point,3857),
+
+    class_code varchar(10),
+
+    class_name varchar(100),
+
+    naim_tr text,
+
+    naim varchar(255),
+
+    rasp_piket text,
+
+    funk_nazn varchar(255),
+
+    teh_hrkt text,
+
+    primechan text,
+
+    dzo varchar(8),
+
+    CONSTRAINT "OT_Truboprovod_P_ready_pkey"
+        PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE normalization."OT_Truboprovod_P_ready" IS
+'Финальный нормализованный набор точечных объектов трубопроводов, готовый к публикации и экспорту в SHP.';
+
+
+/* ============================================================
+   8. РЕЗУЛЬТАТ СРАВНЕНИЯ С BGD
+
+   Здесь после первого запуска будет понятно:
+
+       NEW
+       UPDATE
+       REVIEW_UNKNOWN_ID
+       и т.д.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_changes"
+(
+    id uuid PRIMARY KEY,
+
+    dzo varchar(8),
+
+    id_origin varchar(12),
+
+    operation varchar(50),
+
+    has_attribute_changes boolean,
+
+    has_geometry_changes boolean,
+
+    details text
+);
+
+
+COMMENT ON TABLE normalization."OT_Truboprovod_P_changes" IS
+'Результат сравнения текущей поставки точек с существующими объектами bgd_PAO: новый объект, изменение существующего или объект, требующий проверки.';
+
+
+/* ============================================================
+   9. ОШИБКИ И ПРЕДУПРЕЖДЕНИЯ
+
+   Перед новым запуском таблица очищается.
+
+   Благодаря постоянной таблице результаты можно смотреть
+   даже после закрытия SQL-редактора.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_issues"
+(
+    issue_id bigserial PRIMARY KEY,
+
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    severity varchar(20),
+
+    issue_type varchar(100),
+
+    object_id uuid,
+
+    dzo varchar(8),
+
+    field_name varchar(100),
+
+    source_value text,
+
+    details text
+);
+
+
+COMMENT ON TABLE normalization."OT_Truboprovod_P_issues" IS
+'Ошибки, предупреждения и значения, требующие ручного решения при нормализации точечных объектов трубопроводов.';
+
+
+/* ============================================================
+   10. FUZZY-КАНДИДАТЫ
+
+   Сюда записываются возможные соответствия
+   из удалённых справочников.
+
+   Например:
+       исходный naim_tr
+       → 5 наиболее похожих Pipelines.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_candidates"
+(
+    candidate_row_id bigserial PRIMARY KEY,
+
+    field_name varchar(100),
+
+    dzo varchar(8),
+
+    source_value text,
+
+    objects_count integer,
+
+    candidate_rank integer,
+
+    candidate_id uuid,
+
+    candidate_value text,
+
+    similarity_value numeric(6,4),
+
+    decision_hint varchar(50)
+);
+
+
+COMMENT ON TABLE normalization."OT_Truboprovod_P_candidates" IS
+'Кандидаты для ручного выбора при отсутствии точного соответствия funk_nazn или naim_tr справочникам neo_nsi.';
+
+
+/* ============================================================
+   11. КЛАССИФИКАТОР ТОЧЕК
+
+   class_name -> class_code
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_class_map"
 (
     class_name varchar(100) PRIMARY KEY,
 
@@ -256,70 +424,48 @@ CREATE TABLE IF NOT EXISTS norm.point_class_map
 );
 
 
-INSERT INTO norm.point_class_map
+COMMENT ON TABLE normalization."OT_Truboprovod_P_class_map" IS
+'Соответствие class_name и class_code для точечных объектов трубопроводов.';
+
+
+INSERT INTO normalization."OT_Truboprovod_P_class_map"
 (
     class_name,
     class_code
 )
 VALUES
 
-(
-    'Узел запорно регулирующей арматуры',
-    '1030203001'
-),
-
-(
-    'Узел запуска очистных устройств',
-    '1030203002'
-),
-
-(
-    'Узел приема очистных устройств',
-    '1030203003'
-),
-
-(
-    'Точка врезки',
-    '1030203004'
-),
-
-(
-    'Точки входа и выхода на поверхность',
-    '1030203005'
-),
-
-(
-    'Путевой подогреватель нефти',
-    '1030203006'
-),
-
-(
-    'Контрольный пункт линейной телемеханики',
-    '1030203007'
-)
+('Узел запорно регулирующей арматуры', '1030203001'),
+('Узел запуска очистных устройств', '1030203002'),
+('Узел приема очистных устройств', '1030203003'),
+('Точка врезки', '1030203004'),
+('Точки входа и выхода на поверхность', '1030203005'),
+('Путевой подогреватель нефти', '1030203006'),
+('Контрольный пункт линейной телемеханики', '1030203007')
 
 ON CONFLICT (class_name)
 DO UPDATE SET
-
     class_code = EXCLUDED.class_code;
 
 
 /* ============================================================
-   0.8. ИЗВЕСТНЫЕ ОБЩИЕ ИСПРАВЛЕНИЯ
+   12. НАКОПЛЕННЫЕ ОБЩИЕ ИСПРАВЛЕНИЯ
 
-   Сюда постепенно перенесём старые UPDATE типа:
+   Здесь постепенно вытесняем старые многочисленные UPDATE.
 
-       кран К1 -> Кран К1
-       старое написание -> правильное написание
+   Пример:
+       поле naim
+       "кран К1"
+       → "Кран К1"
 
    dzo = '*'
-       правило действует на все ДЗО.
+       правило для всех ДЗО.
 
    dzo = 'YGEO'
-       правило только YGEO.
+       только YGEO.
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS norm.point_value_map
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_value_map"
 (
     map_id bigserial PRIMARY KEY,
 
@@ -331,7 +477,9 @@ CREATE TABLE IF NOT EXISTS norm.point_value_map
 
     source_key text
         GENERATED ALWAYS AS
-        (norm.text_key(source_value))
+        (
+            normalization.text_key(source_value)
+        )
         STORED,
 
     normalized_value text,
@@ -344,46 +492,26 @@ CREATE TABLE IF NOT EXISTS norm.point_value_map
 
     updated_at timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT point_value_map_field_chk
-        CHECK
-        (
-            field_name IN
-            (
-                'naim',
-                'class_name',
-                'naim_tr',
-                'rasp_piket',
-                'funk_nazn',
-                'teh_hrkt',
-                'primechan'
-            )
-        ),
-
-    CONSTRAINT point_value_map_unique
-        UNIQUE
-        (
-            dzo,
-            field_name,
-            source_key
-        )
+    UNIQUE
+    (
+        dzo,
+        field_name,
+        source_key
+    )
 );
 
 
+COMMENT ON TABLE normalization."OT_Truboprovod_P_value_map" IS
+'Накопленные универсальные исправления текстовых значений точечных объектов трубопроводов.';
+
+
 /* ============================================================
-   0.9. РУЧНЫЕ РЕШЕНИЯ funk_nazn -> UUID НСИ
+   13. ПРИНЯТЫЕ РЕШЕНИЯ funk_nazn
 
-   Это память системы.
-
-   Если пользователь однажды подтвердил:
-
-       "старое значение"
-           ->
-       PurposesOfPipelineNetworkObjects.id
-
-   в следующих поставках решение будет применяться само.
+   Сохраняем UUID справочника neo_nsi.
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS norm.point_purpose_map
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_purpose_map"
 (
     map_id bigserial PRIMARY KEY,
 
@@ -393,7 +521,9 @@ CREATE TABLE IF NOT EXISTS norm.point_purpose_map
 
     source_key text
         GENERATED ALWAYS AS
-        (norm.text_key(source_value))
+        (
+            normalization.text_key(source_value)
+        )
         STORED,
 
     purpose_id uuid NOT NULL,
@@ -406,22 +536,25 @@ CREATE TABLE IF NOT EXISTS norm.point_purpose_map
 
     updated_at timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT point_purpose_map_unique
-        UNIQUE
-        (
-            dzo,
-            source_key
-        )
+    UNIQUE
+    (
+        dzo,
+        source_key
+    )
 );
 
 
-/* ============================================================
-   0.10. РУЧНЫЕ РЕШЕНИЯ naim_tr -> Pipelines.id
+COMMENT ON TABLE normalization."OT_Truboprovod_P_purpose_map" IS
+'Подтверждённые пользователем соответствия исходного funk_nazn UUID справочника PurposesOfPipelineNetworkObjects.';
 
-   Аналогично сохраняем однажды принятое решение.
+
+/* ============================================================
+   14. ПРИНЯТЫЕ РЕШЕНИЯ naim_tr
+
+   source naim_tr -> Pipelines.id
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS norm.point_pipeline_map
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_pipeline_map"
 (
     map_id bigserial PRIMARY KEY,
 
@@ -431,7 +564,9 @@ CREATE TABLE IF NOT EXISTS norm.point_pipeline_map
 
     source_key text
         GENERATED ALWAYS AS
-        (norm.text_key(source_value))
+        (
+            normalization.text_key(source_value)
+        )
         STORED,
 
     pipeline_id uuid NOT NULL,
@@ -444,29 +579,28 @@ CREATE TABLE IF NOT EXISTS norm.point_pipeline_map
 
     updated_at timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT point_pipeline_map_unique
-        UNIQUE
-        (
-            dzo,
-            source_key
-        )
+    UNIQUE
+    (
+        dzo,
+        source_key
+    )
 );
 
 
+COMMENT ON TABLE normalization."OT_Truboprovod_P_pipeline_map" IS
+'Подтверждённые соответствия исходного naim_tr конкретному Pipelines.id в neo_nsi.';
+
+
 /* ============================================================
-   0.11. ИСКЛЮЧЕНИЯ КОНКРЕТНЫХ ОБЪЕКТОВ
+   15. ИСКЛЮЧЕНИЯ КОНКРЕТНЫХ ТОЧЕК
 
-   Например:
+   Например определённой точке с конкретным UUID
+   требуется особая teh_hrkt.
 
-       конкретная точка
-       имеет особую teh_hrkt
-
-   Это НЕ общее правило.
-
-   Поэтому сохраняем по UUID объекта.
+   Это не универсальное правило.
    ============================================================ */
 
-CREATE TABLE IF NOT EXISTS norm.point_object_override
+CREATE TABLE IF NOT EXISTS normalization."OT_Truboprovod_P_object_override"
 (
     object_id uuid NOT NULL,
 
@@ -490,9 +624,13 @@ CREATE TABLE IF NOT EXISTS norm.point_object_override
 );
 
 
+COMMENT ON TABLE normalization."OT_Truboprovod_P_object_override" IS
+'Ручные исключения для конкретных точечных объектов трубопроводов по UUID.';
+
+
 /* ============================================================
-   0.12. ПРОВЕРКА НАСТРОЙКИ
+   16. ИТОГ
    ============================================================ */
 
 SELECT
-    'SETUP POINT READY' AS result;
+    'Схема normalization подготовлена' AS result;
