@@ -1,0 +1,374 @@
+/* ============================================================
+   ГЛАВНЫЙ ОТЧЁТ ПО НОРМАЛИЗАЦИИ ТОЧЕК
+
+   НИЧЕГО НЕ ИСПРАВЛЯЕТ.
+
+   Только собирает в одном месте:
+   - проблему;
+   - исходное значение;
+   - лучший кандидат;
+   - similarity;
+   - совпадение чисел;
+   - предполагаемую причину;
+   - что делать пользователю.
+   ============================================================ */
+
+CREATE OR REPLACE VIEW
+normalization."OT_Truboprovod_P_review"
+AS
+
+WITH best_candidate AS
+(
+    SELECT
+        field_name,
+        dzo,
+        source_value,
+        objects_count,
+        candidate_id,
+        candidate_value,
+        similarity_value,
+        numeric_compatible,
+        source_numbers,
+        candidate_numbers
+
+    FROM normalization."OT_Truboprovod_P_candidates"
+
+    WHERE candidate_rank = 1
+),
+
+base AS
+(
+    SELECT
+        i.issue_id,
+
+        i.severity,
+
+        i.issue_type,
+
+        i.object_id,
+
+        i.dzo,
+
+        i.field_name,
+
+        i.source_value,
+
+        i.details,
+
+        c.objects_count,
+
+        c.candidate_id,
+
+        c.candidate_value,
+
+        c.similarity_value,
+
+        c.numeric_compatible,
+
+        c.source_numbers,
+
+        c.candidate_numbers
+
+    FROM normalization."OT_Truboprovod_P_issues" i
+
+    LEFT JOIN best_candidate c
+
+      ON c.field_name = i.field_name
+
+     AND c.dzo = i.dzo
+
+     AND c.source_value
+         IS NOT DISTINCT FROM
+         i.source_value
+)
+
+SELECT
+    issue_id,
+
+
+    /* --------------------------------------------------------
+       Приоритет для сортировки
+       -------------------------------------------------------- */
+
+    CASE severity
+        WHEN 'ERROR' THEN 1
+        WHEN 'REVIEW' THEN 2
+        WHEN 'WARNING' THEN 3
+        ELSE 4
+    END
+    AS priority,
+
+
+    severity,
+
+    issue_type,
+
+    object_id,
+
+    dzo,
+
+    field_name,
+
+    source_value,
+
+
+    COALESCE(
+        objects_count,
+        1
+    )
+    AS objects_count,
+
+
+    candidate_value
+        AS best_candidate,
+
+
+    candidate_id
+        AS best_candidate_id,
+
+
+    similarity_value,
+
+
+    source_numbers,
+
+    candidate_numbers,
+
+    numeric_compatible,
+
+
+    /* ========================================================
+       ПОНЯТНАЯ ПРИЧИНА
+       ======================================================== */
+
+    CASE
+
+        /* ---------- PIPELINES ---------- */
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+         AND candidate_value IS NULL
+
+            THEN
+            'В Pipelines не найден даже похожий кандидат'
+
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+         AND numeric_compatible = false
+
+            THEN
+            'У лучшего кандидата отличаются числовые обозначения'
+
+
+        /*
+         Например:
+
+             исходник:
+             ... до УКПГ СНГКМ
+
+             кандидат:
+             ... до УКПГ
+
+         Мы только диагностируем дополнительный текст.
+         НИЧЕГО из строки автоматически не удаляем.
+        */
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+         AND
+         (
+             normalization.pipeline_match_key(source_value)
+             LIKE
+             normalization.pipeline_match_key(candidate_value)
+             || ' %'
+
+             OR
+
+             normalization.pipeline_match_key(candidate_value)
+             LIKE
+             normalization.pipeline_match_key(source_value)
+             || ' %'
+         )
+
+            THEN
+            'Одна строка содержит дополнительный текст относительно другой'
+
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+         AND similarity_value >= 0.90
+
+            THEN
+            'Очень высокое текстовое сходство, но строки содержательно различаются'
+
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+         AND similarity_value >= 0.70
+
+            THEN
+            'Среднее текстовое сходство. Требуется проверка'
+
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+            THEN
+            'Низкое текстовое сходство. Надёжное соответствие не найдено'
+
+
+        /* ---------- PURPOSE ---------- */
+
+        WHEN issue_type =
+             'PURPOSE_UNRESOLVED'
+
+         AND candidate_value IS NULL
+
+            THEN
+            'Подходящего значения функционального назначения не найдено'
+
+
+        WHEN issue_type =
+             'PURPOSE_UNRESOLVED'
+
+         AND similarity_value >= 0.80
+
+            THEN
+            'Есть похожее функциональное назначение'
+
+
+        WHEN issue_type =
+             'PURPOSE_UNRESOLVED'
+
+            THEN
+            'Текстовое сходство со справочником недостаточно для автоматического решения'
+
+
+        /* ---------- ПИКЕТ ---------- */
+
+        WHEN issue_type =
+             'PIKET_FORMAT'
+
+            THEN
+            'Пикетаж после автоматической очистки не соответствует стандартному формату'
+
+
+        /* ---------- ID ---------- */
+
+        WHEN issue_type =
+             'REVIEW_UNKNOWN_ID'
+
+            THEN
+            'UUID пришёл из поставки, но не найден в bgd_PAO'
+
+
+        WHEN issue_type =
+             'ERROR_ID_COLLISION'
+
+            THEN
+            'UUID нового объекта уже существует в bgd_PAO'
+
+
+        /* ---------- ПУСТЫЕ ---------- */
+
+        WHEN issue_type =
+             'PURPOSE_NULL'
+
+            THEN
+            'Функциональное назначение отсутствует'
+
+
+        WHEN issue_type =
+             'PIPELINE_NULL'
+
+            THEN
+            'Наименование трубопровода отсутствует'
+
+
+        /* ---------- ДУБЛИ ---------- */
+
+        WHEN issue_type =
+             'PIPELINE_EXACT_DUPLICATE'
+
+            THEN
+            'В Pipelines несколько записей с одинаковым наименованием'
+
+
+        WHEN issue_type =
+             'PIPELINE_TECHNICAL_DUPLICATE'
+
+            THEN
+            'После технической нормализации найдено несколько одинаковых Pipelines'
+
+
+        ELSE
+            details
+
+    END
+    AS reason,
+
+
+    /* ========================================================
+       ЧТО ДЕЛАТЬ
+       ======================================================== */
+
+    CASE
+
+        WHEN issue_type =
+             'PIPELINE_UNRESOLVED'
+
+            THEN
+            'Сравнить исходное значение с лучшим кандидатом. Содержательные отличия автоматически не удалять. При необходимости уточнить у поставщика данных.'
+
+
+        WHEN issue_type =
+             'PURPOSE_UNRESOLVED'
+
+            THEN
+            'Проверить предложенное значение справочника. После подтверждения сохранить соответствие в OT_Truboprovod_P_purpose_map.'
+
+
+        WHEN issue_type =
+             'PIKET_FORMAT'
+
+            THEN
+            'Проверить rasp_piket. Если ошибка типовая — добавить общее правило нормализации; если единичная — исправить конкретный объект.'
+
+
+        WHEN issue_type =
+             'REVIEW_UNKNOWN_ID'
+
+            THEN
+            'Определить, новый это объект или изменение существующего.'
+
+
+        WHEN issue_type =
+             'PURPOSE_NULL'
+
+            THEN
+            'Проверить, допустимо ли отсутствие funk_nazn для данного объекта.'
+
+
+        WHEN issue_type IN
+        (
+            'PIPELINE_EXACT_DUPLICATE',
+            'PIPELINE_TECHNICAL_DUPLICATE'
+        )
+
+            THEN
+            'Действие не требуется. Один UUID выбран автоматически.'
+
+
+        ELSE
+            'Проверить значение'
+
+    END
+    AS action
+
+FROM base;
