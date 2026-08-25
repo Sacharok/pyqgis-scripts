@@ -1,0 +1,38 @@
+SELECT
+    has_schema_privilege('bgd_sb', 'public', 'USAGE')  AS schema_usage,
+    has_schema_privilege('bgd_sb', 'public', 'CREATE') AS schema_create;
+
+
+SELECT
+    'Projects' AS table_name,
+    has_table_privilege('bgd_sb', '"Projects"', 'SELECT') AS sel,
+    has_table_privilege('bgd_sb', '"Projects"', 'INSERT') AS ins,
+    has_table_privilege('bgd_sb', '"Projects"', 'UPDATE') AS upd,
+    has_table_privilege('bgd_sb', '"Projects"', 'DELETE') AS del
+
+UNION ALL
+
+SELECT
+    'Parts',
+    has_table_privilege('bgd_sb', '"Parts"', 'SELECT'),
+    has_table_privilege('bgd_sb', '"Parts"', 'INSERT'),
+    has_table_privilege('bgd_sb', '"Parts"', 'UPDATE'),
+    has_table_privilege('bgd_sb', '"Parts"', 'DELETE')
+
+UNION ALL
+
+SELECT
+    'Sections',
+    has_table_privilege('bgd_sb', '"Sections"', 'SELECT'),
+    has_table_privilege('bgd_sb', '"Sections"', 'INSERT'),
+    has_table_privilege('bgd_sb', '"Sections"', 'UPDATE'),
+    has_table_privilege('bgd_sb', '"Sections"', 'DELETE')
+
+UNION ALL
+
+SELECT
+    'GdbTables',
+    has_table_privilege('bgd_sb', '"GdbTables"', 'SELECT'),
+    has_table_privilege('bgd_sb', '"GdbTables"', 'INSERT'),
+    has_table_privilege('bgd_sb', '"GdbTables"', 'UPDATE'),
+    has_table_privilege('bgd_sb', '"GdbTables"', 'DELETE');
