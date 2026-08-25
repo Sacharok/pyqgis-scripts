@@ -1,0 +1,31 @@
+INSERT INTO public."UserDbConnects"
+(
+    "Database",
+    "Host",
+    "Name",
+    "Password",
+    "Port",
+    "UserName",
+    "GeoServerUrl",
+    "GeoServerLogin",
+    "GeoServerPassword",
+    "Schema",
+    "SystemType",
+    "UserId"
+)
+SELECT
+    'bgd_SB',                 -- новая база
+    "Host",
+    'BGD_SB',                 -- название подключения
+    '<ПАРОЛЬ_ПОЛЬЗОВАТЕЛЯ_bgd_sb>',
+    "Port",
+    'bgd_sb',                 -- пользователь новой базы
+    "GeoServerUrl",
+    "GeoServerLogin",
+    "GeoServerPassword",
+    "Schema",
+    "SystemType",
+    "UserId"
+FROM public."UserDbConnects"
+WHERE "Database" = 'bgd_AGAZ'
+RETURNING *;
