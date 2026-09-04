@@ -1,0 +1,25 @@
+SELECT
+    s."Id" AS "SegmentId",
+    p1."Name" AS "Начало",
+    p2."Name" AS "Конец",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "GasPipeSegments" s
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+LEFT JOIN "SegmentWorkPeriods" wp
+    ON wp."GasPipeSegmentId" = s."Id"
+WHERE
+    (
+        p1."Name" = '277,8 км Краснодарский край-Серпухов'
+        AND p2."Name" = 'КС Октябрьская (Ростовская область)'
+    )
+    OR
+    (
+        p1."Name" = 'КС Октябрьская (Ростовская область)'
+        AND p2."Name" = '277,8 км Краснодарский край-Серпухов'
+    )
+ORDER BY p1."Name", wp."StartDateTime";
