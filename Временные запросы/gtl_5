@@ -1,0 +1,15 @@
+SELECT
+    e."Id" AS "EdgeId",
+    e."source",
+    p1."Name" AS "Source",
+    e."target",
+    p2."Name" AS "Target",
+    e."GasPipeSegmentIds"
+FROM "GtsEdges" e
+LEFT JOIN "GtsPoints" p1
+    ON p1."Id" = e."SourceId"
+LEFT JOIN "GtsPoints" p2
+    ON p2."Id" = e."TargetId"
+WHERE
+    '3399be04-c3f2-4cd4-b7fc-aaa66f6167e3' = ANY(e."GasPipeSegmentIds")
+ OR 'b234d742-31dd-4c2c-af71-0e95d11166d3' = ANY(e."GasPipeSegmentIds");
