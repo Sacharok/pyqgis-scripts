@@ -1,0 +1,17 @@
+SELECT
+    wp."Id",
+    wp."GasPipeSegmentId",
+    p1."Name" AS "Точка начала сегмента",
+    p2."Name" AS "Точка конца сегмента",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+JOIN "GasPipeSegments" s
+    ON s."Id" = wp."GasPipeSegmentId"
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+WHERE wp."StartDateTime"::date = '2026-04-01'
+  AND wp."EndDateTime"::date = '2026-11-01';
