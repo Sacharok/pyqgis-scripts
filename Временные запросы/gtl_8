@@ -1,0 +1,19 @@
+SELECT
+    p1."Name" AS "Начало",
+    p2."Name" AS "Конец",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+JOIN "GasPipeSegments" s
+    ON s."Id" = wp."GasPipeSegmentId"
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+WHERE
+    (p1."Name" = 'КС Новоуренгойская'
+     AND p2."Name" = 'КС Пурпейская')
+ OR
+    (p1."Name" = 'КС Пурпейская'
+     AND p2."Name" = 'КС Новоуренгойская');
