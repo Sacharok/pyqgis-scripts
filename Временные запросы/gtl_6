@@ -1,0 +1,29 @@
+SELECT
+    e."Id" AS "EdgeId",
+    p1."Name" AS "Source",
+    p2."Name" AS "Target",
+
+    CASE
+        WHEN '3399be04-c3f2-4cd4-b7fc-aaa66f6167e3'::uuid
+             = ANY(e."GasPipeSegmentIds")
+        THEN 'исходный сегмент'
+        ELSE ''
+    END AS "3399",
+
+    CASE
+        WHEN 'b234d742-31dd-4c2c-af71-0e95d11166d3'::uuid
+             = ANY(e."GasPipeSegmentIds")
+        THEN 'новый сегмент'
+        ELSE ''
+    END AS "b234"
+
+FROM "GtsEdges" e
+LEFT JOIN "GtsPoints" p1
+    ON p1."Id" = e."SourceId"
+LEFT JOIN "GtsPoints" p2
+    ON p2."Id" = e."TargetId"
+WHERE
+       '3399be04-c3f2-4cd4-b7fc-aaa66f6167e3'::uuid
+       = ANY(e."GasPipeSegmentIds")
+    OR 'b234d742-31dd-4c2c-af71-0e95d11166d3'::uuid
+       = ANY(e."GasPipeSegmentIds");
