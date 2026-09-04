@@ -1,0 +1,36 @@
+SELECT
+    s."Id" AS "SegmentId",
+    p1."Name" AS "Сегмент_начало",
+    p2."Name" AS "Сегмент_конец",
+    e."Id" AS "EdgeId",
+    ep1."Name" AS "Edge_Source",
+    ep2."Name" AS "Edge_Target",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "GasPipeSegments" s
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+LEFT JOIN "GtsEdges" e
+    ON s."Id" = ANY(e."GasPipeSegmentIds")
+LEFT JOIN "GtsPoints" ep1
+    ON ep1."Id" = e."SourceId"
+LEFT JOIN "GtsPoints" ep2
+    ON ep2."Id" = e."TargetId"
+LEFT JOIN "SegmentWorkPeriods" wp
+    ON wp."GasPipeSegmentId" = s."Id"
+WHERE
+    (
+        p1."Name" = 'КС Кущевская'
+        AND p2."Name" = '42 км Ростов-Майкоп'
+    )
+    OR
+    (
+        p1."Name" = '42 км Ростов-Майкоп'
+        AND p2."Name" = 'КС Кущевская'
+    )
+ORDER BY
+    s."Id",
+    wp."StartDateTime";
