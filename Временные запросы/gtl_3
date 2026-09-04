@@ -1,0 +1,16 @@
+SELECT
+    s."Id",
+    p1."Name" AS "Начало",
+    p2."Name" AS "Конец",
+    s."StartKilometer"
+FROM "GasPipeSegments" s
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+WHERE
+    (p1."Name" = '277,8 км Краснодарский край-Серпухов'
+     AND p2."Name" = 'КС Октябрьская (Ростовская область)')
+ OR
+    (p1."Name" = 'КС Октябрьская (Ростовская область)'
+     AND p2."Name" = '277,8 км Краснодарский край-Серпухов');
