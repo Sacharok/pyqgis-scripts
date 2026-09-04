@@ -1,0 +1,9 @@
+SELECT
+    wp."Id",
+    wp."GasPipeSegmentId",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+WHERE wp."GasPipeSegmentId" = 'f359ae92-78c3-41cc-9e79-5de37a441bf1'
+ORDER BY wp."StartDateTime";
