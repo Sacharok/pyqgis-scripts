@@ -1,0 +1,51 @@
+SELECT
+    wp."Id",
+    wp."GasPipeSegmentId",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+WHERE wp."StartDateTime" IS NULL
+  AND wp."EndDateTime" IS NULL;
+
+
+
+SELECT
+    s."Id" AS "SegmentId",
+    p1."Name" AS "Начало",
+    p2."Name" AS "Конец",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+JOIN "GasPipeSegments" s
+    ON s."Id" = wp."GasPipeSegmentId"
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+WHERE wp."StartDateTime" IS NULL
+  AND wp."EndDateTime" IS NULL
+ORDER BY p1."Name", p2."Name";
+
+
+
+SELECT
+    s."Id" AS "SegmentId",
+    p1."Name" AS "Начало",
+    p2."Name" AS "Конец",
+    wp."StartDateTime",
+    wp."EndDateTime",
+    wp."WorkType"
+FROM "SegmentWorkPeriods" wp
+JOIN "GasPipeSegments" s
+    ON s."Id" = wp."GasPipeSegmentId"
+JOIN "GtsPoints" p1
+    ON p1."Id" = s."StartGtsPointId"
+JOIN "GtsPoints" p2
+    ON p2."Id" = s."EndGtsPointId"
+WHERE
+       p1."Name" ILIKE '%Новоуренгой%'
+    OR p2."Name" ILIKE '%Новоуренгой%'
+    OR p1."Name" ILIKE '%Пурпей%'
+    OR p2."Name" ILIKE '%Пурпей%';
