@@ -1,0 +1,288 @@
+CREATE EXTENSION IF NOT EXISTS dblink;
+
+DO $$
+DECLARE
+    r record;
+    v_sql text;
+    v_result text;
+
+    v_bgd_conn text :=
+        'host=... port=5432 dbname=bgd_PAO user=... password=...';
+
+    v_nsi_conn text :=
+        'host=... port=5432 dbname=nsi user=... password=...';
+
+    v_project_id uuid :=
+        '2d651fc5-e7be-4111-ae54-ea1be76d18cd';
+
+BEGIN
+
+    /* ---------------------------------------------------------
+       1. Подтягиваем отсутствующий class_code из существующей БГД
+       --------------------------------------------------------- */
+
+    PERFORM dblink_connect('bgd', v_bgd_conn);
+
+    UPDATE normalization."DS_Dorogi_L_YUNG_klass_prav" y
+    SET class_code = ref.class_code
+    FROM (
+        SELECT
+            class_name,
+            class_code
+        FROM dblink(
+            'bgd',
+            $q$
+                SELECT
+                    class_name,
+                    MIN(class_code) AS class_code
+                FROM public."DS_Dorogi_L"
+                WHERE class_code IS NOT NULL
+                GROUP BY class_name
+                HAVING COUNT(DISTINCT class_code) = 1
+            $q$
+        ) AS x(
+            class_name varchar,
+            class_code varchar
+        )
+    ) ref
+    WHERE y.class_code IS NULL
+      AND y.class_name = ref.class_name;
+
+
+    /* После автозаполнения пустых кодов быть не должно */
+
+    IF EXISTS (
+        SELECT 1
+        FROM normalization."DS_Dorogi_L_YUNG_klass_prav"
+        WHERE class_code IS NULL
+    )
+    THEN
+        RAISE EXCEPTION
+            'Остались объекты без class_code';
+    END IF;
+
+
+    /* ---------------------------------------------------------
+       2. Проверяем UUID
+       --------------------------------------------------------- */
+
+    BEGIN
+        PERFORM id::uuid
+        FROM normalization."DS_Dorogi_L_YUNG_klass_prav";
+    EXCEPTION
+        WHEN invalid_text_representation THEN
+            RAISE EXCEPTION
+                'В поставке есть некорректный id UUID';
+    END;
+
+
+    /* ---------------------------------------------------------
+       3. Проверяем, что дороги с такими наименованиями ещё не загружены
+       --------------------------------------------------------- */
+
+    IF EXISTS (
+        SELECT 1
+        FROM normalization."DS_Dorogi_L_YUNG_klass_prav" y
+        JOIN dblink(
+            'bgd',
+            'SELECT naim FROM public."DS_Dorogi_L"'
+        ) AS b(naim varchar)
+          ON lower(btrim(b.naim)) = lower(btrim(y.naim))
+    )
+    THEN
+        RAISE EXCEPTION
+            'В DS_Dorogi_L уже существуют дороги с такими наименованиями';
+    END IF;
+
+
+    /* ---------------------------------------------------------
+       4. Загружаем DS_Dorogi_L
+       --------------------------------------------------------- */
+
+    PERFORM dblink_exec('bgd', 'BEGIN');
+
+    FOR r IN
+        SELECT *
+        FROM normalization."DS_Dorogi_L_YUNG_klass_prav"
+    LOOP
+
+        v_sql := format(
+            $q$
+            INSERT INTO public."DS_Dorogi_L"
+            (
+                id,
+                project_id,
+                geom,
+                class_code,
+                class_name,
+                naim,
+                mat_pokr,
+                sobstvnk,
+                shir_pokr,
+                shir_proez,
+                protzh,
+                kol_polos,
+                teh_ktg,
+                ogranichen,
+                primechan
+            )
+            VALUES
+            (
+                %L::uuid,
+                %L::uuid,
+                ST_Multi(ST_GeomFromEWKT(%L)),
+                %L,
+                %L,
+                %L,
+                %L,
+                %L,
+                %L::double precision,
+                %L::double precision,
+                %L::double precision,
+                %L::integer,
+                %L,
+                %L,
+                %L
+            )
+            $q$,
+
+            r.id,
+            v_project_id,
+            ST_AsEWKT(r.geom),
+
+            r.class_code,
+            r.class_name,
+            r.naim,
+            r.mat_pokr,
+            r.sobstvnk,
+
+            r.shir_pokr,
+            r.shir_proez,
+            r.protzh,
+            r.kol_polos,
+
+            r.teh_ktg,
+            r.ogranichen,
+            r.primechan
+        );
+
+        v_result := dblink_exec('bgd', v_sql);
+
+        IF v_result <> 'INSERT 0 1' THEN
+            RAISE EXCEPTION
+                'Не удалось загрузить "%"', r.naim;
+        END IF;
+
+    END LOOP;
+
+    PERFORM dblink_exec('bgd', 'COMMIT');
+    PERFORM dblink_disconnect('bgd');
+
+
+    /* ---------------------------------------------------------
+       5. Загружаем те же дороги в NSI.Roads
+       --------------------------------------------------------- */
+
+    PERFORM dblink_connect('nsi', v_nsi_conn);
+    PERFORM dblink_exec('nsi', 'BEGIN');
+
+    FOR r IN
+        SELECT *
+        FROM normalization."DS_Dorogi_L_YUNG_klass_prav"
+    LOOP
+
+        v_sql := format(
+            $q$
+            INSERT INTO public."Roads"
+            (
+                id,
+                naim,
+                mat_pokr,
+                sobstvnk,
+                shir_pokr,
+                shir_proez,
+                protzh,
+                kol_polos,
+                teh_ktg,
+                ogranichen,
+                primechan
+            )
+            SELECT
+                %L::uuid,
+                %L,
+                cm.id,
+                cp.id,
+                %L::double precision,
+                %L::double precision,
+                %L::double precision,
+                %L::integer,
+                nc.id,
+                %L,
+                %L
+
+            FROM public."CoatingMaterials" cm
+            CROSS JOIN public."Counterparties" cp
+            CROSS JOIN public."NormativeClassOfRoad" nc
+
+            WHERE cm.naim = %L
+              AND cp.krat_naim = %L
+              AND nc.naim = %L
+            $q$,
+
+            r.id,
+            r.naim,
+
+            r.shir_pokr,
+            r.shir_proez,
+            r.protzh,
+            r.kol_polos,
+
+            r.ogranichen,
+            r.primechan,
+
+            r.mat_pokr,
+            r.sobstvnk,
+            r.teh_ktg
+        );
+
+        v_result := dblink_exec('nsi', v_sql);
+
+        IF v_result <> 'INSERT 0 1' THEN
+            RAISE EXCEPTION
+                'NSI: не найден справочник или не загружена дорога "%"',
+                r.naim;
+        END IF;
+
+    END LOOP;
+
+    PERFORM dblink_exec('nsi', 'COMMIT');
+    PERFORM dblink_disconnect('nsi');
+
+    RAISE NOTICE
+        'ГОТОВО: DS_Dorogi_L и NSI.Roads успешно загружены';
+
+EXCEPTION
+    WHEN OTHERS THEN
+
+        BEGIN
+            PERFORM dblink_exec('bgd', 'ROLLBACK');
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_disconnect('bgd');
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_exec('nsi', 'ROLLBACK');
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_disconnect('nsi');
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        RAISE;
+END $$;
