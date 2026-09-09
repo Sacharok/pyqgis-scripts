@@ -1,0 +1,192 @@
+CREATE EXTENSION IF NOT EXISTS dblink;
+
+DO $$
+DECLARE
+    r record;
+    v_sql text;
+    v_result text;
+
+    v_bgd_conn text :=
+        'host=... port=5432 dbname=bgd_PAO user=... password=...';
+
+    v_project_id uuid :=
+        '2d651fc5-e7be-4111-ae54-ea1be76d18cd';
+
+BEGIN
+
+    /* ---------------------------------------------------------
+       1. Для каждого графового сегмента должна определиться
+          ровно одна дорога текущей поставки.
+       --------------------------------------------------------- */
+
+    IF EXISTS (
+
+        WITH matches AS (
+
+            SELECT
+                g.ctid AS graf_row,
+                COUNT(d.id) AS road_count
+
+            FROM normalization."DS_Dorogi_Graf_L_YUNG_klass_prav" g
+
+            LEFT JOIN normalization."DS_Dorogi_L_YUNG_klass_prav" d
+                ON ST_DWithin(g.geom, d.geom, 2)
+
+            GROUP BY g.ctid
+        )
+
+        SELECT 1
+        FROM matches
+        WHERE road_count <> 1
+
+    )
+    THEN
+        RAISE EXCEPTION
+            'Есть сегменты графа, для которых дорога не определена или определена неоднозначно';
+    END IF;
+
+
+    /* ---------------------------------------------------------
+       2. Загрузка графа
+       --------------------------------------------------------- */
+
+    PERFORM dblink_connect('bgd_graf', v_bgd_conn);
+    PERFORM dblink_exec('bgd_graf', 'BEGIN');
+
+
+    FOR r IN
+
+        SELECT
+            g.geom,
+
+            d.id,
+            d.class_code,
+            d.class_name,
+            d.naim,
+            d.mat_pokr,
+            d.sobstvnk,
+            d.shir_pokr,
+            d.shir_proez,
+            d.protzh,
+            d.kol_polos,
+            d.teh_ktg,
+            d.ogranichen,
+            d.primechan
+
+        FROM normalization."DS_Dorogi_Graf_L_YUNG_klass_prav" g
+
+        JOIN normalization."DS_Dorogi_L_YUNG_klass_prav" d
+            ON ST_DWithin(g.geom, d.geom, 2)
+
+    LOOP
+
+        v_sql := format(
+            $q$
+
+            INSERT INTO public."DS_Dorogi_Graf_L"
+            (
+                project_id,
+                geom,
+                class_code,
+                class_name,
+                naim,
+                mat_pokr,
+                sobstvnk,
+                shir_pokr,
+                shir_proez,
+                protzh,
+                kol_polos,
+                teh_ktg,
+                ogranichen,
+                primechan,
+                id
+            )
+
+            VALUES
+            (
+                %L::uuid,
+                ST_Multi(ST_GeomFromEWKT(%L)),
+
+                %L,
+                %L,
+                %L,
+                %L,
+                %L,
+
+                %L::double precision,
+                %L::double precision,
+                %L::double precision,
+                %L::integer,
+
+                %L,
+                %L,
+                %L,
+
+                %L::uuid
+            )
+
+            $q$,
+
+            v_project_id,
+            ST_AsEWKT(r.geom),
+
+            r.class_code,
+            r.class_name,
+            r.naim,
+            r.mat_pokr,
+            r.sobstvnk,
+
+            r.shir_pokr,
+            r.shir_proez,
+            r.protzh,
+            r.kol_polos,
+
+            r.teh_ktg,
+            r.ogranichen,
+            r.primechan,
+
+            r.id
+        );
+
+
+        v_result := dblink_exec(
+            'bgd_graf',
+            v_sql
+        );
+
+        IF v_result <> 'INSERT 0 1' THEN
+            RAISE EXCEPTION
+                'Не удалось загрузить сегмент графа дороги "%"',
+                r.naim;
+        END IF;
+
+    END LOOP;
+
+
+    PERFORM dblink_exec('bgd_graf', 'COMMIT');
+    PERFORM dblink_disconnect('bgd_graf');
+
+    RAISE NOTICE
+        'ГОТОВО: DS_Dorogi_Graf_L успешно загружен';
+
+
+EXCEPTION
+    WHEN OTHERS THEN
+
+        BEGIN
+            PERFORM dblink_exec(
+                'bgd_graf',
+                'ROLLBACK'
+            );
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_disconnect(
+                'bgd_graf'
+            );
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        RAISE;
+END $$;
