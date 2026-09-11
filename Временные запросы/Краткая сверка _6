@@ -1,0 +1,122 @@
+WITH comparison AS (
+
+    /* OT_Truboprovod_A */
+    SELECT
+        'bgd_PAO'::text AS database_name,
+        'OT_Truboprovod_A'::text AS table_name,
+        p.id AS prod_key,
+        t.id AS test_key
+    FROM dblink(
+        'bgd_prod',
+        'SELECT id::text FROM public."OT_Truboprovod_A"'
+    ) AS p(id text)
+    FULL JOIN dblink(
+        'bgd_test',
+        'SELECT id::text FROM public."OT_Truboprovod_A"'
+    ) AS t(id text)
+        ON p.id = t.id
+
+    UNION ALL
+
+    /* OT_Truboprovod_L */
+    SELECT
+        'bgd_PAO',
+        'OT_Truboprovod_L',
+        p.id,
+        t.id
+    FROM dblink(
+        'bgd_prod',
+        'SELECT id::text FROM public."OT_Truboprovod_L"'
+    ) AS p(id text)
+    FULL JOIN dblink(
+        'bgd_test',
+        'SELECT id::text FROM public."OT_Truboprovod_L"'
+    ) AS t(id text)
+        ON p.id = t.id
+
+    UNION ALL
+
+    /* OT_Truboprovod_P */
+    SELECT
+        'bgd_PAO',
+        'OT_Truboprovod_P',
+        p.id,
+        t.id
+    FROM dblink(
+        'bgd_prod',
+        'SELECT id::text FROM public."OT_Truboprovod_P"'
+    ) AS p(id text)
+    FULL JOIN dblink(
+        'bgd_test',
+        'SELECT id::text FROM public."OT_Truboprovod_P"'
+    ) AS t(id text)
+        ON p.id = t.id
+
+    UNION ALL
+
+    /* Pipelines */
+    SELECT
+        'neo_nsi',
+        'Pipelines',
+        p.id,
+        t.id
+    FROM dblink(
+        'nsi_prod',
+        'SELECT id::text FROM public."Pipelines"'
+    ) AS p(id text)
+    FULL JOIN dblink(
+        'nsi_test',
+        'SELECT id::text FROM public."Pipelines"'
+    ) AS t(id text)
+        ON p.id = t.id
+
+    UNION ALL
+
+    /* CompositionOfLinearObjectPipelines */
+    SELECT
+        'neo_nsi',
+        'CompositionOfLinearObjectPipelines',
+        p.object_key,
+        t.object_key
+    FROM dblink(
+        'nsi_prod',
+        $$
+        SELECT
+            id::text || '|' || COALESCE(naim_tr::text, '<NULL>')
+        FROM public."CompositionOfLinearObjectPipelines"
+        $$
+    ) AS p(object_key text)
+    FULL JOIN dblink(
+        'nsi_test',
+        $$
+        SELECT
+            id::text || '|' || COALESCE(naim_tr::text, '<NULL>')
+        FROM public."CompositionOfLinearObjectPipelines"
+        $$
+    ) AS t(object_key text)
+        ON p.object_key = t.object_key
+)
+
+SELECT
+    database_name AS "База",
+    table_name AS "Таблица",
+    COUNT(prod_key) AS "PROD",
+    COUNT(test_key) AS "TEST",
+
+    COUNT(*) FILTER (
+        WHERE prod_key IS NOT NULL
+          AND test_key IS NULL
+    ) AS "Нет на TEST",
+
+    COUNT(*) FILTER (
+        WHERE prod_key IS NULL
+          AND test_key IS NOT NULL
+    ) AS "Нет на PROD"
+
+FROM comparison
+GROUP BY
+    database_name,
+    table_name
+ORDER BY
+    database_name,
+    table_name;
