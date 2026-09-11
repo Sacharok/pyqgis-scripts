@@ -1,0 +1,218 @@
+SELECT dblink_connect(
+    'bgd_test',
+    'host=TEST_HOST port=5432 dbname=bgd_PAO user=USER password=PASSWORD'
+);
+
+SELECT dblink_connect(
+    'bgd_prod',
+    'host=PROD_HOST port=5432 dbname=bgd_PAO user=USER password=PASSWORD'
+);
+
+SELECT dblink_connect(
+    'nsi_test',
+    'host=TEST_HOST port=5432 dbname=neo_nsi user=USER password=PASSWORD'
+);
+
+SELECT dblink_connect(
+    'nsi_prod',
+    'host=PROD_HOST port=5432 dbname=neo_nsi user=USER password=PASSWORD'
+);
+
+... проверка 
+SELECT *
+FROM dblink(
+    'bgd_test',
+    'SELECT current_database()'
+) AS t(database_name text);
+
+SELECT *
+FROM dblink(
+    'bgd_prod',
+    'SELECT current_database()'
+) AS t(database_name text);
+
+SELECT *
+FROM dblink(
+    'nsi_test',
+    'SELECT current_database()'
+) AS t(database_name text);
+
+SELECT *
+FROM dblink(
+    'nsi_prod',
+    'SELECT current_database()'
+) AS t(database_name text);
+
+
+....
+
+SELECT
+    database_name,
+    table_name,
+    prod_count,
+    test_count,
+    prod_count - test_count AS difference
+FROM (
+
+    /* ===== bgd_PAO ===== */
+
+    SELECT
+        'bgd_PAO' AS database_name,
+        'OT_Truboprovod_A' AS table_name,
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_prod',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_A"'
+            ) AS t(cnt bigint)
+        ) AS prod_count,
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_test',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_A"'
+            ) AS t(cnt bigint)
+        ) AS test_count
+
+    UNION ALL
+
+    SELECT
+        'bgd_PAO',
+        'OT_Truboprovod_L',
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_prod',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_L"'
+            ) AS t(cnt bigint)
+        ),
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_test',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_L"'
+            ) AS t(cnt bigint)
+        )
+
+    UNION ALL
+
+    SELECT
+        'bgd_PAO',
+        'OT_Truboprovod_P',
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_prod',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_P"'
+            ) AS t(cnt bigint)
+        ),
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'bgd_test',
+                'SELECT COUNT(*) FROM public."OT_Truboprovod_P"'
+            ) AS t(cnt bigint)
+        )
+
+    /* ===== neo_nsi ===== */
+
+    UNION ALL
+
+    SELECT
+        'neo_nsi',
+        'CompositionOfLinearObjectPipelines',
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'nsi_prod',
+                'SELECT COUNT(*) FROM public."CompositionOfLinearObjectPipelines"'
+            ) AS t(cnt bigint)
+        ),
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'nsi_test',
+                'SELECT COUNT(*) FROM public."CompositionOfLinearObjectPipelines"'
+            ) AS t(cnt bigint)
+        )
+
+    UNION ALL
+
+    SELECT
+        'neo_nsi',
+        'Pipelines',
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'nsi_prod',
+                'SELECT COUNT(*) FROM public."Pipelines"'
+            ) AS t(cnt bigint)
+        ),
+
+        (
+            SELECT cnt
+            FROM dblink(
+                'nsi_test',
+                'SELECT COUNT(*) FROM public."Pipelines"'
+            ) AS t(cnt bigint)
+        )
+
+) s
+ORDER BY database_name, table_name;
+
+
+
+SELECT
+    COALESCE(p.table_name, t.table_name) AS table_name,
+    COALESCE(p.id, t.id) AS id,
+
+    CASE
+        WHEN t.id IS NULL THEN 'Нет на TEST'
+        WHEN p.id IS NULL THEN 'Нет на PROD'
+    END AS difference
+
+FROM prod p
+FULL JOIN test t
+    ON p.table_name = t.table_name
+   AND p.id = t.id
+
+WHERE p.id IS NULL
+   OR t.id IS NULL
+
+ORDER BY
+    table_name,
+    difference,
+    id;
+
+
+
+SELECT *
+FROM dblink(
+    'nsi_prod',
+    $$
+    SELECT
+        table_name,
+        column_name,
+        data_type
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN (
+          'Pipelines',
+          'CompositionOfLinearObjectPipelines'
+      )
+    ORDER BY table_name, ordinal_position
+    $$
+) AS t(
+    table_name text,
+    column_name text,
+    data_type text
+);
