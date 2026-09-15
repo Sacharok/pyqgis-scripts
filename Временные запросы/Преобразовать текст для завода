@@ -1,0 +1,203 @@
+from qgis.core import (
+    QgsProject,
+    QgsTextFormat,
+    QgsPalLayerSettings,
+    QgsProperty,
+    QgsVectorLayerSimpleLabeling,
+    QgsNullSymbolRenderer,
+    Qgis
+)
+
+# Находим объединенный слой
+layers = QgsProject.instance().mapLayersByName("CAD_ALL_TEXTS")
+
+if not layers:
+    raise Exception("Слой CAD_ALL_TEXTS не найден")
+
+layer = layers[0]
+
+# -----------------------------------------
+# Точки самого слоя не показываем —
+# отображаться должен только CAD-текст
+# -----------------------------------------
+
+layer.setRenderer(QgsNullSymbolRenderer())
+
+
+# -----------------------------------------
+# Базовый формат текста
+# -----------------------------------------
+
+text_format = QgsTextFormat()
+
+# Очень важно:
+# height в DXF — это размер в единицах карты
+text_format.setSizeUnit(Qgis.RenderUnit.MapUnits)
+
+
+# -----------------------------------------
+# Настройки подписей
+# -----------------------------------------
+
+pls = QgsPalLayerSettings()
+
+pls.setFormat(text_format)
+
+pls.drawLabels = True
+
+# Текст надписи
+pls.fieldName = "text"
+
+# Переносы строк MTEXT из CAD
+pls.wrapChar = "\\P"
+
+
+dd = pls.dataDefinedProperties()
+
+
+# -----------------------------------------
+# Размер текста
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.Size,
+    QgsProperty.fromField("height")
+)
+
+
+# -----------------------------------------
+# Цвет текста
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.Color,
+    QgsProperty.fromField("color")
+)
+
+
+# -----------------------------------------
+# Межстрочный интервал
+# -----------------------------------------
+
+if layer.fields().lookupField("interlin") >= 0:
+    dd.setProperty(
+        QgsPalLayerSettings.Property.MultiLineHeight,
+        QgsProperty.fromExpression(
+            'CASE WHEN "interlin" < 0 '
+            'THEN 1 '
+            'ELSE "interlin" * 1.5 END'
+        )
+    )
+
+
+# -----------------------------------------
+# Жестко сохраняем исходное положение текста
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.PositionX,
+    QgsProperty.fromExpression("$x")
+)
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.PositionY,
+    QgsProperty.fromExpression("$y")
+)
+
+
+# -----------------------------------------
+# Горизонтальное выравнивание
+#
+# etype = 19 -> MTEXT
+# etype = 25 -> обычный TEXT
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.Hali,
+    QgsProperty.fromExpression(
+        '''
+        CASE
+          WHEN "etype" = 19 THEN
+            CASE
+              WHEN "textgen" % 3 = 2 THEN 'Center'
+              WHEN "textgen" % 3 = 0 THEN 'Right'
+              ELSE 'Left'
+            END
+          ELSE
+            CASE
+              WHEN "alignh" = 1 THEN 'Center'
+              WHEN "alignh" = 2 THEN 'Right'
+              ELSE 'Left'
+            END
+        END
+        '''
+    )
+)
+
+
+# -----------------------------------------
+# Вертикальное выравнивание
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.Vali,
+    QgsProperty.fromExpression(
+        '''
+        CASE
+          WHEN "etype" = 19 THEN
+            CASE
+              WHEN "textgen" < 4 THEN 'Top'
+              WHEN "textgen" < 7 THEN 'Half'
+              ELSE 'Bottom'
+            END
+          ELSE
+            CASE
+              WHEN "alignv" = 1 THEN 'Bottom'
+              WHEN "alignv" = 2 THEN 'Half'
+              WHEN "alignv" = 3 THEN 'Top'
+              ELSE 'Base'
+            END
+        END
+        '''
+    )
+)
+
+
+# -----------------------------------------
+# Поворот
+# DXF и QGIS считают направление угла по-разному
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.LabelRotation,
+    QgsProperty.fromExpression('360 - "angle"')
+)
+
+
+# -----------------------------------------
+# Показываем все подписи,
+# даже если они перекрываются
+# -----------------------------------------
+
+dd.setProperty(
+    QgsPalLayerSettings.Property.AlwaysShow,
+    QgsProperty.fromExpression("1")
+)
+
+
+# -----------------------------------------
+# Применяем
+# -----------------------------------------
+
+layer.setLabeling(
+    QgsVectorLayerSimpleLabeling(pls)
+)
+
+layer.setLabelsEnabled(True)
+
+layer.triggerRepaint()
+
+print(
+    f"Готово. Настроено подписей: "
+    f"{layer.featureCount()}"
+)
