@@ -1,0 +1,102 @@
+import math
+
+from qgis.PyQt.QtCore import QVariant
+from qgis.core import (
+    QgsProject,
+    QgsField,
+    QgsCoordinateTransform,
+    QgsPointXY,
+    QgsWkbTypes
+)
+
+# Активный слой = ваши точки
+points = iface.activeLayer()
+
+if points is None:
+    raise Exception("Не выбран слой точек.")
+
+if QgsWkbTypes.geometryType(points.wkbType()) != QgsWkbTypes.PointGeometry:
+    raise Exception("Активный слой должен быть точечным.")
+
+# Ищем подключенный ArcticDEM WCS
+rasters = [
+    layer for layer in QgsProject.instance().mapLayers().values()
+    if "Height_Orthometric" in layer.name()
+]
+
+if not rasters:
+    raise Exception("Не найден растр Height_Orthometric.")
+
+raster = rasters[0]
+
+print("Точки:", points.name())
+print("Растр:", raster.name())
+print("CRS точек:", points.crs().authid())
+print("CRS растра:", raster.crs().authid())
+
+# Поле, куда будет записана высота
+field_name = "height_dem"
+
+if points.fields().indexFromName(field_name) == -1:
+    points.dataProvider().addAttributes([
+        QgsField(field_name, QVariant.Double, len=12, prec=2)
+    ])
+    points.updateFields()
+
+field_idx = points.fields().indexFromName(field_name)
+
+# Преобразование координат точек в CRS ArcticDEM
+transform = QgsCoordinateTransform(
+    points.crs(),
+    raster.crs(),
+    QgsProject.instance()
+)
+
+provider = raster.dataProvider()
+
+# Если есть выделенные точки — обрабатываем только их.
+# Если выделения нет — все точки.
+features = points.selectedFeatures()
+
+if not features:
+    features = list(points.getFeatures())
+
+points.startEditing()
+
+ok_count = 0
+bad_count = 0
+
+for feature in features:
+
+    geom = feature.geometry()
+
+    if geom is None or geom.isEmpty():
+        bad_count += 1
+        continue
+
+    if geom.isMultipart():
+        p = geom.asMultiPoint()[0]
+    else:
+        p = geom.asPoint()
+
+    p_dem = transform.transform(QgsPointXY(p))
+
+    value, ok = provider.sample(p_dem, 1)
+
+    if ok and value is not None and not math.isnan(value):
+        points.changeAttributeValue(
+            feature.id(),
+            field_idx,
+            round(float(value), 2)
+        )
+        ok_count += 1
+        print(feature.id(), "->", round(float(value), 2))
+    else:
+        bad_count += 1
+        print(feature.id(), "-> Нет значения")
+
+points.commitChanges()
+
+print("----------------")
+print("Получено высот:", ok_count)
+print("Без значения:", bad_count)
