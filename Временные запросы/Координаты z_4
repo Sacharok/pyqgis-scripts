@@ -1,0 +1,206 @@
+import json
+import urllib.parse
+import urllib.request
+
+from qgis.PyQt.QtCore import QVariant
+from qgis.core import (
+    QgsProject,
+    QgsField,
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsPointXY,
+    QgsWkbTypes
+)
+
+# --------------------------------------------------
+# НАСТРОЙКИ
+# --------------------------------------------------
+
+SERVICE = (
+    "https://di-pgc.img.arcgis.com/"
+    "arcgis/rest/services/arcticdem_latest/ImageServer"
+)
+
+FIELD_NAME = "height"
+
+
+# --------------------------------------------------
+# 1. Активный слой = слой с точками
+# --------------------------------------------------
+
+points = iface.activeLayer()
+
+if points is None:
+    raise Exception("Не выбран слой точек.")
+
+if QgsWkbTypes.geometryType(points.wkbType()) != QgsWkbTypes.PointGeometry:
+    raise Exception("Активный слой должен быть точечным.")
+
+features = points.selectedFeatures()
+
+if not features:
+    raise Exception("Нет выделенных точек.")
+
+print("Слой:", points.name())
+print("Выделено точек:", len(features))
+
+
+# --------------------------------------------------
+# 2. Начинаем редактирование
+# --------------------------------------------------
+
+was_editable = points.isEditable()
+
+if not was_editable:
+    if not points.startEditing():
+        raise Exception("Не удалось включить режим редактирования слоя.")
+
+
+# --------------------------------------------------
+# 3. Создаём height, если его нет
+# --------------------------------------------------
+
+field_idx = points.fields().indexFromName(FIELD_NAME)
+
+if field_idx == -1:
+
+    ok = points.addAttribute(
+        QgsField(
+            FIELD_NAME,
+            QVariant.Double,
+            len=12,
+            prec=2
+        )
+    )
+
+    if not ok:
+        raise Exception("Не удалось создать поле height.")
+
+    points.updateFields()
+    field_idx = points.fields().indexFromName(FIELD_NAME)
+
+    print("Создано поле:", FIELD_NAME)
+
+
+# --------------------------------------------------
+# 4. CRS ArcticDEM = EPSG:3413
+# --------------------------------------------------
+
+dem_crs = QgsCoordinateReferenceSystem("EPSG:3413")
+
+transform = QgsCoordinateTransform(
+    points.crs(),
+    dem_crs,
+    QgsProject.instance()
+)
+
+
+# --------------------------------------------------
+# 5. Получаем Orthometric Height
+# --------------------------------------------------
+
+ok_count = 0
+bad_count = 0
+
+for num, feature in enumerate(features, start=1):
+
+    try:
+
+        geom = feature.geometry()
+
+        if geom is None or geom.isEmpty():
+            raise Exception("пустая геометрия")
+
+        if geom.isMultipart():
+            point = geom.asMultiPoint()[0]
+        else:
+            point = geom.asPoint()
+
+        # Координата в EPSG:3413
+        p = transform.transform(QgsPointXY(point))
+
+        geometry = {
+            "x": p.x(),
+            "y": p.y(),
+            "spatialReference": {
+                "wkid": 3413
+            }
+        }
+
+        # Именно ортометрическая высота
+        rendering_rule = {
+            "rasterFunction": "Height Orthometric"
+        }
+
+        params = {
+            "geometry": json.dumps(geometry),
+            "geometryType": "esriGeometryPoint",
+            "renderingRule": json.dumps(rendering_rule),
+            "returnGeometry": "false",
+            "returnCatalogItems": "false",
+            "f": "json"
+        }
+
+        url = (
+            SERVICE
+            + "/identify?"
+            + urllib.parse.urlencode(params)
+        )
+
+        with urllib.request.urlopen(url, timeout=30) as response:
+            result = json.load(response)
+
+        if "error" in result:
+            raise Exception(result["error"])
+
+        value = result.get("value")
+
+        if value is None:
+            raise Exception("сервер не вернул высоту")
+
+        height = round(float(value), 2)
+
+        points.changeAttributeValue(
+            feature.id(),
+            field_idx,
+            height
+        )
+
+        ok_count += 1
+
+        print(
+            f"{num}/{len(features)} | "
+            f"ID {feature.id()} -> {height} м"
+        )
+
+    except Exception as e:
+
+        bad_count += 1
+
+        print(
+            f"{num}/{len(features)} | "
+            f"ID {feature.id()} -> ОШИБКА: {e}"
+        )
+
+
+# --------------------------------------------------
+# 6. Сохраняем
+# --------------------------------------------------
+
+if not was_editable:
+    if not points.commitChanges():
+        raise Exception(
+            "Высоты получены, но не удалось сохранить изменения слоя."
+        )
+else:
+    # Если слой уже был в режиме редактирования,
+    # чужие несохранённые изменения автоматически не сохраняем
+    points.triggerRepaint()
+
+
+print("")
+print("-----------------------------")
+print("ГОТОВО")
+print("Записано высот:", ok_count)
+print("Ошибок:", bad_count)
+print("-----------------------------")
