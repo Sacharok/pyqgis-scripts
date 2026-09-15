@@ -1,0 +1,27 @@
+from qgis.core import QgsProject, QgsMapLayerType, QgsFeatureRequest
+
+project = QgsProject.instance()
+empty_layers = []
+
+for layer in project.mapLayers().values():
+
+    # Проверяем только векторные слои
+    if layer.type() != QgsMapLayerType.VectorLayer:
+        continue
+
+    # Пытаемся получить хотя бы один объект
+    request = QgsFeatureRequest()
+    request.setLimit(1)
+
+    first_feature = next(layer.getFeatures(request), None)
+
+    if first_feature is None:
+        empty_layers.append(layer.id())
+        print(f"Пустой слой: {layer.name()}")
+
+print(f"\nНайдено пустых слоёв: {len(empty_layers)}")
+
+# Удаляем их из проекта
+project.removeMapLayers(empty_layers)
+
+print("Пустые слои удалены из проекта.")
