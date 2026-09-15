@@ -1,0 +1,122 @@
+SELECT
+    current_database() AS database_name,
+    'OT_Truboprovod_A' AS table_name,
+    COUNT(*) AS object_count
+FROM public."OT_Truboprovod_A"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'OT_Truboprovod_P',
+    COUNT(*)
+FROM public."OT_Truboprovod_P"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'OT_Truboprovod_L',
+    COUNT(*)
+FROM public."OT_Truboprovod_L"
+
+ORDER BY table_name;
+
+
+
+
+SELECT
+    current_database() AS database_name,
+    'Pipelines' AS table_name,
+    COUNT(*) AS object_count
+FROM public."Pipelines"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'CompositionOfLinearObject',
+    COUNT(*)
+FROM public."CompositionOfLinearObject"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'CompositionOfLinearObjectPipelines',
+    COUNT(*)
+FROM public."CompositionOfLinearObjectPipelines"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'CompositionOfLinerObjectPikets',
+    COUNT(*)
+FROM public."CompositionOfLinerObjectPikets"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PurposesOfPipelineNetworkObjects',
+    COUNT(*)
+FROM public."PurposesOfPipelineNetworkObjects"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PipelineHeatingTypes',
+    COUNT(*)
+FROM public."PipelineHeatingTypes"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PipelineMaterialTypes',
+    COUNT(*)
+FROM public."PipelineMaterialTypes"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PipelineStatuses',
+    COUNT(*)
+FROM public."PipelineStatuses"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PipelineTypeByPurposes',
+    COUNT(*)
+FROM public."PipelineTypeByPurposes"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'PipelineTypeByInstallationMethods',
+    COUNT(*)
+FROM public."PipelineTypeByInstallationMethods"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'InsulationTypes',
+    COUNT(*)
+FROM public."InsulationTypes"
+
+UNION ALL
+
+SELECT
+    current_database(),
+    'DangerousIndustrialFacilities',
+    COUNT(*)
+FROM public."DangerousIndustrialFacilities"
+
+ORDER BY table_name;
