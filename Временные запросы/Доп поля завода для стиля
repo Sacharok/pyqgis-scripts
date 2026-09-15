@@ -1,0 +1,100 @@
+from qgis.core import (
+    QgsProject,
+    QgsField
+)
+from qgis.PyQt.QtCore import QVariant
+
+
+layer = QgsProject.instance().mapLayersByName(
+    "CAD_ALL_POLYGONS"
+)[0]
+
+provider = layer.dataProvider()
+
+
+# Добавляем нужные поля
+new_fields = []
+
+existing = [f.name() for f in layer.fields()]
+
+if "fill_color" not in existing:
+    new_fields.append(
+        QgsField("fill_color", QVariant.String, len=9)
+    )
+
+if "fill_opacity" not in existing:
+    new_fields.append(
+        QgsField("fill_opacity", QVariant.Double)
+    )
+
+if "stroke_color" not in existing:
+    new_fields.append(
+        QgsField("stroke_color", QVariant.String, len=9)
+    )
+
+if "stroke_width" not in existing:
+    new_fields.append(
+        QgsField("stroke_width", QVariant.Double)
+    )
+
+if new_fields:
+    provider.addAttributes(new_fields)
+    layer.updateFields()
+
+
+idx_fill = layer.fields().indexOf("fill_color")
+idx_opacity = layer.fields().indexOf("fill_opacity")
+idx_stroke = layer.fields().indexOf("stroke_color")
+idx_width = layer.fields().indexOf("stroke_width")
+
+
+changes = {}
+
+for f in layer.getFeatures():
+
+    raw = str(f["color"]).strip()
+
+    try:
+        parts = [int(x) for x in raw.split(",")]
+
+        r = parts[0]
+        g = parts[1]
+        b = parts[2]
+
+        # четвертое значение у тебя — alpha
+        a = parts[3] if len(parts) >= 4 else 255
+
+        hex_color = "#{:02X}{:02X}{:02X}".format(r, g, b)
+
+        opacity = a / 255.0
+
+    except:
+        hex_color = "#808080"
+        opacity = 1.0
+
+
+    # Если поле linewidth существует — используем его
+    if layer.fields().indexOf("linewidth") >= 0:
+        try:
+            width = float(f["linewidth"])
+        except:
+            width = 0.05
+    else:
+        width = 0.05
+
+
+    changes[f.id()] = {
+        idx_fill: hex_color,
+        idx_opacity: opacity,
+        idx_stroke: hex_color,
+        idx_width: width
+    }
+
+
+provider.changeAttributeValues(changes)
+
+layer.triggerRepaint()
+
+print(
+    f"Готово: обработано {layer.featureCount()} полигонов"
+)
