@@ -1,0 +1,108 @@
+import json
+import urllib.parse
+import urllib.request
+
+from qgis.core import (
+    QgsProject,
+    QgsRasterLayer,
+    QgsCoordinateTransform,
+    QgsPointXY
+)
+
+# -----------------------------------------
+# Точечный слой = активный слой
+# -----------------------------------------
+
+points = iface.activeLayer()
+
+if points.selectedFeatureCount() == 0:
+    raise Exception("Сначала выделите хотя бы одну точку.")
+
+feature = points.selectedFeatures()[0]
+
+
+# -----------------------------------------
+# Берём единственный растр проекта
+# -----------------------------------------
+
+rasters = [
+    layer
+    for layer in QgsProject.instance().mapLayers().values()
+    if isinstance(layer, QgsRasterLayer)
+]
+
+if len(rasters) != 1:
+    raise Exception(
+        f"Ожидался один растр, найдено: {len(rasters)}"
+    )
+
+raster = rasters[0]
+
+
+# -----------------------------------------
+# Координата точки
+# -----------------------------------------
+
+geom = feature.geometry()
+
+if geom.isMultipart():
+    p = geom.asMultiPoint()[0]
+else:
+    p = geom.asPoint()
+
+
+# Переводим координату в CRS ArcticDEM
+transform = QgsCoordinateTransform(
+    points.crs(),
+    raster.crs(),
+    QgsProject.instance()
+)
+
+p = transform.transform(QgsPointXY(p))
+
+
+# -----------------------------------------
+# Запрос к ArcticDEM
+# -----------------------------------------
+
+service = (
+    "https://di-pgc.img.arcgis.com/"
+    "arcgis/rest/services/arcticdem_latest/ImageServer"
+)
+
+geometry = {
+    "x": p.x(),
+    "y": p.y(),
+    "spatialReference": {
+        "wkid": 3413
+    }
+}
+
+rendering_rule = {
+    "rasterFunction": "Height Orthometric"
+}
+
+params = {
+    "geometry": json.dumps(geometry),
+    "geometryType": "esriGeometryPoint",
+    "renderingRule": json.dumps(rendering_rule),
+    "returnGeometry": "false",
+    "returnCatalogItems": "false",
+    "f": "json"
+}
+
+url = (
+    service
+    + "/identify?"
+    + urllib.parse.urlencode(params)
+)
+
+with urllib.request.urlopen(url, timeout=30) as response:
+    result = json.load(response)
+
+
+print("Ответ сервера:")
+print(result)
+
+print("--------------------")
+print("ORTHOMETRIC HEIGHT:", result.get("value"))
