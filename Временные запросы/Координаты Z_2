@@ -1,0 +1,155 @@
+from qgis.core import (
+    QgsProject,
+    QgsRasterLayer,
+    QgsVectorLayer,
+    QgsWkbTypes,
+    QgsCoordinateTransform,
+    QgsPointXY,
+    QgsRaster,
+    QgsField
+)
+from qgis.PyQt.QtCore import QVariant
+import math
+
+
+# --------------------------------------------------
+# 1. Берём единственный растр проекта
+# --------------------------------------------------
+
+rasters = [
+    layer
+    for layer in QgsProject.instance().mapLayers().values()
+    if isinstance(layer, QgsRasterLayer)
+]
+
+if len(rasters) == 0:
+    raise Exception("В проекте нет растрового слоя.")
+
+if len(rasters) > 1:
+    raise Exception("В проекте больше одного растра.")
+
+raster = rasters[0]
+
+
+# --------------------------------------------------
+# 2. Находим точечный слой с выделенными объектами
+# --------------------------------------------------
+
+point_layers = [
+    layer
+    for layer in QgsProject.instance().mapLayers().values()
+    if isinstance(layer, QgsVectorLayer)
+    and QgsWkbTypes.geometryType(layer.wkbType()) == QgsWkbTypes.PointGeometry
+    and layer.selectedFeatureCount() > 0
+]
+
+if len(point_layers) == 0:
+    raise Exception("Нет точечного слоя с выделенными объектами.")
+
+if len(point_layers) > 1:
+    raise Exception("Выделенные точки есть сразу в нескольких слоях.")
+
+points = point_layers[0]
+
+
+print("Растр:", raster.name())
+print("Точки:", points.name())
+print("Выделено:", points.selectedFeatureCount())
+
+
+# --------------------------------------------------
+# 3. Создаём поле для высоты
+# --------------------------------------------------
+
+field_name = "height"
+
+if points.fields().indexFromName(field_name) == -1:
+    points.dataProvider().addAttributes([
+        QgsField(field_name, QVariant.Double, len=12, prec=2)
+    ])
+    points.updateFields()
+
+field_idx = points.fields().indexFromName(field_name)
+
+
+# --------------------------------------------------
+# 4. Преобразование координат точек в CRS растра
+# --------------------------------------------------
+
+transform = QgsCoordinateTransform(
+    points.crs(),
+    raster.crs(),
+    QgsProject.instance()
+)
+
+provider = raster.dataProvider()
+
+
+# --------------------------------------------------
+# 5. Получаем высоту для выделенных точек
+# --------------------------------------------------
+
+points.startEditing()
+
+ok_count = 0
+bad_count = 0
+
+for feature in points.selectedFeatures():
+
+    geom = feature.geometry()
+
+    if geom.isEmpty():
+        print(feature.id(), "-> пустая геометрия")
+        bad_count += 1
+        continue
+
+    if geom.isMultipart():
+        point = geom.asMultiPoint()[0]
+    else:
+        point = geom.asPoint()
+
+    raster_point = transform.transform(QgsPointXY(point))
+
+    result = provider.identify(
+        raster_point,
+        QgsRaster.IdentifyFormatValue
+    )
+
+    value = result.results().get(1)
+
+    try:
+        value = float(value)
+
+        if math.isnan(value):
+            raise ValueError
+
+        points.changeAttributeValue(
+            feature.id(),
+            field_idx,
+            round(value, 2)
+        )
+
+        print(
+            "ID:", feature.id(),
+            "Высота:", round(value, 2)
+        )
+
+        ok_count += 1
+
+    except (TypeError, ValueError):
+
+        print(
+            "ID:", feature.id(),
+            "-> высота не получена"
+        )
+
+        bad_count += 1
+
+
+points.commitChanges()
+
+
+print("-------------------------")
+print("Готово")
+print("Получено высот:", ok_count)
+print("Без значения:", bad_count)
