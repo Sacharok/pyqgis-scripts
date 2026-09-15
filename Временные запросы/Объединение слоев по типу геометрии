@@ -1,0 +1,228 @@
+from qgis.core import (
+    QgsProject,
+    QgsMapLayerType,
+    QgsWkbTypes,
+    QgsVectorLayer,
+    QgsFeature,
+    QgsField,
+    QgsRenderContext,
+    QgsExpressionContext,
+    QgsExpressionContextUtils,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsSymbol
+)
+from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtGui import QColor
+import processing
+
+
+project = QgsProject.instance()
+
+# Имена итоговых слоев
+OUTPUT_NAMES = {
+    QgsWkbTypes.PointGeometry: "CAD_ALL_POINTS",
+    QgsWkbTypes.LineGeometry: "CAD_ALL_LINES",
+    QgsWkbTypes.PolygonGeometry: "CAD_ALL_POLYGONS"
+}
+
+# Сюда будут собираться временные слои
+groups = {
+    QgsWkbTypes.PointGeometry: [],
+    QgsWkbTypes.LineGeometry: [],
+    QgsWkbTypes.PolygonGeometry: []
+}
+
+
+# ---------------------------------------------------------
+# 1. Подготавливаем каждый исходный слой:
+#    сохраняем его атрибуты + имя CAD-слоя + цвет
+# ---------------------------------------------------------
+
+for layer in list(project.mapLayers().values()):
+
+    if layer.type() != QgsMapLayerType.VectorLayer:
+        continue
+
+    # Не берем ранее созданные итоговые слои
+    if layer.name() in OUTPUT_NAMES.values():
+        continue
+
+    if layer.featureCount() == 0:
+        continue
+
+    geom_type = QgsWkbTypes.geometryType(layer.wkbType())
+
+    if geom_type not in groups:
+        print(f"Пропущен неподдерживаемый тип: {layer.name()}")
+        continue
+
+    # Создаем временную копию слоя
+    crs = layer.crs().authid()
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        geom_name = "Point"
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        geom_name = "LineString"
+    else:
+        geom_name = "Polygon"
+
+    # Если исходный слой Multi/Z, QGIS при добавлении геометрии
+    # сам корректно сохранит ее в memory provider
+    temp = QgsVectorLayer(
+        f"{geom_name}?crs={crs}",
+        f"tmp_{layer.name()}",
+        "memory"
+    )
+
+    provider = temp.dataProvider()
+
+    # Все исходные поля
+    provider.addAttributes(layer.fields())
+
+    # Наши служебные поля
+    provider.addAttributes([
+        QgsField("_cad_layer", QVariant.String),
+        QgsField("_cad_color", QVariant.String),
+        QgsField("_cad_alpha", QVariant.Int),
+        QgsField("_cad_style", QVariant.String)
+    ])
+
+    temp.updateFields()
+
+    # Подготавливаем renderer исходного слоя
+    renderer = layer.renderer().clone()
+
+    context = QgsRenderContext()
+    expression_context = QgsExpressionContext()
+
+    for scope in QgsExpressionContextUtils.globalProjectLayerScopes(layer):
+        expression_context.appendScope(scope)
+
+    context.setExpressionContext(expression_context)
+
+    renderer.startRender(context, layer.fields())
+
+    new_features = []
+
+    for f in layer.getFeatures():
+
+        context.expressionContext().setFeature(f)
+
+        symbol = renderer.symbolForFeature(f, context)
+
+        if symbol is not None:
+            color = symbol.color()
+            hex_color = color.name(QColor.HexRgb)
+            alpha = color.alpha()
+        else:
+            hex_color = "#000000"
+            alpha = 255
+
+        style_key = f"{hex_color}_{alpha}"
+
+        new_f = QgsFeature(temp.fields())
+        new_f.setGeometry(f.geometry())
+
+        # Копируем исходные атрибуты
+        attrs = list(f.attributes())
+
+        attrs.extend([
+            layer.name(),
+            hex_color,
+            alpha,
+            style_key
+        ])
+
+        new_f.setAttributes(attrs)
+        new_features.append(new_f)
+
+    renderer.stopRender(context)
+
+    provider.addFeatures(new_features)
+    temp.updateExtents()
+
+    groups[geom_type].append(temp)
+
+    print(
+        f"{layer.name()}: "
+        f"{layer.featureCount()} объектов"
+    )
+
+
+# ---------------------------------------------------------
+# 2. Объединяем слои отдельно по типам геометрии
+# ---------------------------------------------------------
+
+created_layers = []
+
+for geom_type, layers in groups.items():
+
+    if not layers:
+        continue
+
+    result = processing.run(
+        "native:mergevectorlayers",
+        {
+            "LAYERS": layers,
+            "CRS": None,
+            "OUTPUT": "memory:"
+        }
+    )
+
+    merged = result["OUTPUT"]
+    merged.setName(OUTPUT_NAMES[geom_type])
+
+
+    # -----------------------------------------------------
+    # 3. Восстанавливаем цвета
+    # -----------------------------------------------------
+
+    styles = {}
+
+    for f in merged.getFeatures():
+
+        style = f["_cad_style"]
+        color = f["_cad_color"]
+        alpha = f["_cad_alpha"]
+
+        if style not in styles:
+            styles[style] = (color, alpha)
+
+    categories = []
+
+    for style, (color_hex, alpha) in sorted(styles.items()):
+
+        symbol = QgsSymbol.defaultSymbol(geom_type)
+
+        color = QColor(color_hex)
+        color.setAlpha(int(alpha))
+
+        symbol.setColor(color)
+
+        category = QgsRendererCategory(
+            style,
+            symbol,
+            color_hex
+        )
+
+        categories.append(category)
+
+    renderer = QgsCategorizedSymbolRenderer(
+        "_cad_style",
+        categories
+    )
+
+    merged.setRenderer(renderer)
+
+    project.addMapLayer(merged)
+    created_layers.append(merged)
+
+    print(
+        f"\nСоздан {merged.name()}: "
+        f"{merged.featureCount()} объектов, "
+        f"{len(styles)} цветов"
+    )
+
+
+print("\nГОТОВО")
