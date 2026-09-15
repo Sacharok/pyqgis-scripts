@@ -1,0 +1,176 @@
+from qgis.core import (
+    QgsProject,
+    QgsMapLayerType,
+    QgsWkbTypes,
+    QgsSimpleLineSymbolLayer,
+    QgsSimpleFillSymbolLayer,
+    QgsSimpleMarkerSymbolLayer,
+    QgsLineSymbol,
+    QgsFillSymbol,
+    QgsMarkerSymbol,
+    QgsSingleSymbolRenderer,
+    QgsProperty,
+    QgsSymbolLayer
+)
+import processing
+
+
+project = QgsProject.instance()
+
+groups = {
+    "POINTS": [],
+    "LINES": [],
+    "POLYGONS": [],
+    "TEXTS": []
+}
+
+
+# --------------------------------------------------
+# 1. Разбираем имеющиеся слои
+# --------------------------------------------------
+
+for layer in project.mapLayers().values():
+
+    if layer.type() != QgsMapLayerType.VectorLayer:
+        continue
+
+    if layer.featureCount() == 0:
+        continue
+
+    # Не берем результаты предыдущего объединения
+    if layer.name().startswith("CAD_ALL_"):
+        continue
+
+    field_names = [f.name().lower() for f in layer.fields()]
+
+    # Текст специализированного DWG/DXF импорта
+    if "text" in field_names and "height" in field_names:
+        groups["TEXTS"].append(layer)
+        continue
+
+    geom_type = QgsWkbTypes.geometryType(layer.wkbType())
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        groups["POINTS"].append(layer)
+
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        groups["LINES"].append(layer)
+
+    elif geom_type == QgsWkbTypes.PolygonGeometry:
+        groups["POLYGONS"].append(layer)
+
+
+# --------------------------------------------------
+# 2. Объединяем
+# --------------------------------------------------
+
+results = {}
+
+for group_name, layers in groups.items():
+
+    if not layers:
+        print(f"{group_name}: слоев нет")
+        continue
+
+    result = processing.run(
+        "native:mergevectorlayers",
+        {
+            "LAYERS": layers,
+            "CRS": None,
+            "OUTPUT": "memory:"
+        }
+    )
+
+    merged = result["OUTPUT"]
+    merged.setName(f"CAD_ALL_{group_name}")
+
+    project.addMapLayer(merged)
+    results[group_name] = merged
+
+    print(
+        f"{merged.name()}: "
+        f"{merged.featureCount()} объектов"
+    )
+
+
+# --------------------------------------------------
+# 3. ЛИНИИ
+# Цвет берем непосредственно из поля color
+# --------------------------------------------------
+
+if "LINES" in results:
+
+    layer = results["LINES"]
+
+    sl = QgsSimpleLineSymbolLayer()
+
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.Property.StrokeColor,
+        QgsProperty.fromField("color")
+    )
+
+    # Если импорт сохранил толщину
+    if layer.fields().lookupField("linewidth") >= 0:
+        sl.setDataDefinedProperty(
+            QgsSymbolLayer.Property.StrokeWidth,
+            QgsProperty.fromField("linewidth")
+        )
+
+    symbol = QgsLineSymbol()
+    symbol.changeSymbolLayer(0, sl)
+
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    layer.triggerRepaint()
+
+
+# --------------------------------------------------
+# 4. ПОЛИГОНЫ
+# --------------------------------------------------
+
+if "POLYGONS" in results:
+
+    layer = results["POLYGONS"]
+
+    sl = QgsSimpleFillSymbolLayer()
+
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.Property.FillColor,
+        QgsProperty.fromField("color")
+    )
+
+    symbol = QgsFillSymbol()
+    symbol.changeSymbolLayer(0, sl)
+
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    layer.triggerRepaint()
+
+
+# --------------------------------------------------
+# 5. ТОЧКИ
+# --------------------------------------------------
+
+if "POINTS" in results:
+
+    layer = results["POINTS"]
+
+    sl = QgsSimpleMarkerSymbolLayer()
+
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.Property.FillColor,
+        QgsProperty.fromField("color")
+    )
+
+    sl.setDataDefinedProperty(
+        QgsSymbolLayer.Property.StrokeColor,
+        QgsProperty.fromField("color")
+    )
+
+    symbol = QgsMarkerSymbol()
+    symbol.changeSymbolLayer(0, sl)
+
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    layer.triggerRepaint()
+
+
+print("\nГОТОВО")
+print("Цвет берется непосредственно из исходного поля 'color'.")
