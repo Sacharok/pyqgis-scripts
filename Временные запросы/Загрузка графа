@@ -1,0 +1,135 @@
+CREATE EXTENSION IF NOT EXISTS dblink;
+
+DO $$
+DECLARE
+    r record;
+    v_sql text;
+    v_result text;
+
+    v_conn_str text :=
+        'host=... port=5432 dbname=bgd_PAO user=... password=...';
+
+BEGIN
+
+    PERFORM dblink_connect('bgd_graf', v_conn_str);
+    PERFORM dblink_exec('bgd_graf', 'BEGIN');
+
+    FOR r IN
+        SELECT
+            id,
+            geom,
+            class_code,
+            class_name,
+            naim,
+            mat_pokr,
+            sobstvnk,
+            shir_pokr,
+            shir_proez,
+            protzh,
+            kol_polos,
+            teh_ktg,
+            ogranichen,
+            primechan
+        FROM normalization."DS_Dorogi_Graf_L_YUNG_klass_prav"
+    LOOP
+
+        v_sql := format(
+            $sql$
+
+            INSERT INTO public."DS_Dorogi_Graf_L"
+            (
+                project_id,
+                geom,
+                class_code,
+                class_name,
+                naim,
+                mat_pokr,
+                sobstvnk,
+                shir_pokr,
+                shir_proez,
+                protzh,
+                kol_polos,
+                teh_ktg,
+                ogranichen,
+                primechan,
+                id
+            )
+            VALUES
+            (
+                '2d651fc5-e7be-4111-ae54-ea1be76d18cd'::uuid,
+
+                ST_Multi(ST_GeomFromEWKT(%L)),
+
+                %L,
+                %L,
+                %L,
+                %L,
+                %L,
+
+                %L::double precision,
+                %L::double precision,
+                %L::double precision,
+                %L::integer,
+
+                %L,
+                %L,
+                %L,
+
+                %L::uuid
+            );
+
+            $sql$,
+
+            ST_AsEWKT(r.geom),
+
+            r.class_code,
+            r.class_name,
+            r.naim,
+            r.mat_pokr,
+            r.sobstvnk,
+
+            r.shir_pokr,
+            r.shir_proez,
+            r.protzh,
+            r.kol_polos,
+
+            r.teh_ktg,
+            r.ogranichen,
+            r.primechan,
+
+            r.id
+        );
+
+        v_result := dblink_exec('bgd_graf', v_sql);
+
+        IF v_result <> 'INSERT 0 1' THEN
+            RAISE EXCEPTION
+                'Ошибка загрузки сегмента дороги "%", id=%',
+                r.naim,
+                r.id;
+        END IF;
+
+    END LOOP;
+
+    PERFORM dblink_exec('bgd_graf', 'COMMIT');
+    PERFORM dblink_disconnect('bgd_graf');
+
+    RAISE NOTICE 'DS_Dorogi_Graf_L успешно загружен';
+
+EXCEPTION
+    WHEN OTHERS THEN
+
+        BEGIN
+            PERFORM dblink_exec('bgd_graf', 'ROLLBACK');
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+
+        BEGIN
+            PERFORM dblink_disconnect('bgd_graf');
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+
+        RAISE;
+END $$;
