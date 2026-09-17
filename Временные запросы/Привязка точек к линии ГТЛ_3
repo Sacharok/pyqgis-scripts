@@ -1,0 +1,622 @@
+import re
+
+from qgis.core import (
+    QgsProject,
+    QgsGeometry,
+    QgsPointXY
+)
+
+
+# =========================================================
+# НАСТРОЙКИ
+# =========================================================
+
+POINT_LAYER_NAME = "Копия точек"
+PIPE_LAYER_NAME = "pipeline_1"
+
+POINT_NAME_FIELD = "Name"
+PIPE_NAME_FIELD = "name"
+
+# Только предупреждение.
+# Даже при большем расстоянии точка будет перенесена.
+WARNING_DISTANCE_M = 10000
+
+
+# =========================================================
+# НОРМАЛИЗАЦИЯ
+# =========================================================
+
+def normalize_name(value):
+
+    if value is None:
+        return ""
+
+    value = str(value).strip().lower()
+    value = value.replace("ё", "е")
+
+    # Оставляем только буквы и цифры
+    value = re.sub(
+        r"[^0-9a-zа-я]+",
+        "",
+        value
+    )
+
+    return value
+
+
+# =========================================================
+# РАЗБОР НАЗВАНИЯ ТОЧКИ
+# =========================================================
+
+def parse_point_name(value):
+
+    if value is None:
+        return None, None
+
+    text = str(value).strip()
+
+    match = re.match(
+        r"^\s*(\d+(?:[.,]\d+)?)\s*км\b[\s\-–—]*(.+)$",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    if not match:
+        return None, None
+
+    km_text = match.group(1).replace(",", ".")
+    route_name = match.group(2).strip()
+
+    try:
+        km_value = float(km_text)
+    except ValueError:
+        return None, None
+
+    return km_value, route_name
+
+
+# =========================================================
+# ПРИОРИТЕТ НАЗВАНИЯ pipeline_1
+# =========================================================
+
+def name_priority(route_norm, pipe_norm):
+    """
+    Чем МЕНЬШЕ число, тем лучше кандидат.
+
+    Например для:
+        route_norm = ухтаторжок
+
+    приоритет будет примерно такой:
+
+        Ухта — Торжок
+            0
+
+        Ухта — Торжок 1
+            1
+
+        Ухта — Торжок 2
+            20
+
+        Ухта — Торжок 3
+            30
+
+        Ухта — Торжок 2 (Ямал)
+            120+
+
+    """
+
+    if pipe_norm == route_norm:
+        return 0
+
+    if not pipe_norm.startswith(route_norm):
+        return None
+
+    suffix = pipe_norm[len(route_norm):]
+
+    if not suffix:
+        return 0
+
+    # ---------------------------------------------
+    # Линия №1
+    # ---------------------------------------------
+
+    if suffix == "1":
+        return 1
+
+    # ---------------------------------------------
+    # Просто номер линии
+    # ---------------------------------------------
+
+    if suffix.isdigit():
+
+        number = int(suffix)
+
+        if number == 1:
+            return 1
+
+        return number * 10
+
+    # ---------------------------------------------
+    # Номер + дополнительное обозначение
+    #
+    # Например:
+    # 2ямал
+    # 3резерв
+    # ---------------------------------------------
+
+    match = re.match(r"^(\d+)(.*)$", suffix)
+
+    if match:
+
+        number = int(match.group(1))
+        extra = match.group(2)
+
+        priority = number * 10
+
+        # Дополнительный текст означает,
+        # что это уже более специальный вариант.
+        if extra:
+            priority += 100
+
+        return priority
+
+    # Любой другой дополнительный текст
+    return 500
+
+
+# =========================================================
+# ПОЛУЧАЕМ СЛОИ
+# =========================================================
+
+point_layers = QgsProject.instance().mapLayersByName(
+    POINT_LAYER_NAME
+)
+
+pipe_layers = QgsProject.instance().mapLayersByName(
+    PIPE_LAYER_NAME
+)
+
+if not point_layers:
+    raise Exception(
+        f"Не найден слой '{POINT_LAYER_NAME}'"
+    )
+
+if not pipe_layers:
+    raise Exception(
+        f"Не найден слой '{PIPE_LAYER_NAME}'"
+    )
+
+points = point_layers[0]
+pipes = pipe_layers[0]
+
+
+# =========================================================
+# ПРОВЕРКИ
+# =========================================================
+
+if points.fields().indexFromName(
+    POINT_NAME_FIELD
+) == -1:
+
+    raise Exception(
+        f"В слое '{POINT_LAYER_NAME}' "
+        f"нет поля '{POINT_NAME_FIELD}'"
+    )
+
+
+if pipes.fields().indexFromName(
+    PIPE_NAME_FIELD
+) == -1:
+
+    raise Exception(
+        f"В слое '{PIPE_LAYER_NAME}' "
+        f"нет поля '{PIPE_NAME_FIELD}'"
+    )
+
+
+selected = points.selectedFeatures()
+
+if not selected:
+    raise Exception(
+        "В слое 'Копия точек' "
+        "нет выделенных объектов"
+    )
+
+
+# =========================================================
+# ЧИТАЕМ pipeline_1
+# =========================================================
+
+pipe_features = []
+
+for feature in pipes.getFeatures():
+
+    if not feature.hasGeometry():
+        continue
+
+    pipe_name = feature[PIPE_NAME_FIELD]
+
+    if pipe_name is None:
+        continue
+
+    pipe_name = str(pipe_name).strip()
+    pipe_norm = normalize_name(pipe_name)
+
+    if not pipe_norm:
+        continue
+
+    geom = feature.geometry()
+
+    if geom.isEmpty():
+        continue
+
+    pipe_features.append(
+        (
+            feature.id(),
+            pipe_name,
+            pipe_norm,
+            geom
+        )
+    )
+
+
+print("=" * 80)
+print(f"Выделено точек: {len(selected)}")
+print(f"Линий pipeline_1: {len(pipe_features)}")
+print("=" * 80)
+
+
+# =========================================================
+# РЕЖИМ РЕДАКТИРОВАНИЯ
+# =========================================================
+
+if not points.isEditable():
+    points.startEditing()
+
+
+moved_count = 0
+not_found_count = 0
+error_count = 0
+
+
+# =========================================================
+# ОБРАБОТКА ТОЧЕК
+# =========================================================
+
+for point_feature in selected:
+
+    print("\n" + "-" * 80)
+
+    if not point_feature.hasGeometry():
+
+        print(
+            f"FID {point_feature.id()}: "
+            f"нет геометрии"
+        )
+
+        error_count += 1
+        continue
+
+
+    point_name = point_feature[POINT_NAME_FIELD]
+
+    if point_name is None:
+
+        print(
+            f"FID {point_feature.id()}: "
+            f"Name = NULL"
+        )
+
+        error_count += 1
+        continue
+
+
+    point_name = str(point_name).strip()
+
+    km_value, route_name = parse_point_name(
+        point_name
+    )
+
+
+    if km_value is None:
+
+        print(f"Точка: {point_name}")
+        print(
+            "Не удалось определить "
+            "километровую отметку."
+        )
+        print("Точка НЕ перемещена.")
+
+        error_count += 1
+        continue
+
+
+    km_meters = km_value * 1000.0
+
+    route_norm = normalize_name(
+        route_name
+    )
+
+    point_geom = point_feature.geometry()
+
+    candidates = []
+
+
+    # =====================================================
+    # ИЩЕМ КАНДИДАТОВ
+    # =====================================================
+
+    for (
+        pipe_fid,
+        pipe_name,
+        pipe_norm,
+        pipe_geom
+    ) in pipe_features:
+
+        priority = name_priority(
+            route_norm,
+            pipe_norm
+        )
+
+        if priority is None:
+            continue
+
+
+        line_length = pipe_geom.length()
+
+        if line_length < km_meters:
+            continue
+
+
+        # =================================================
+        # КИЛОМЕТРАЖ ОТ НАЧАЛА
+        # =================================================
+
+        forward_geom = pipe_geom.interpolate(
+            km_meters
+        )
+
+        if not forward_geom.isEmpty():
+
+            distance = point_geom.distance(
+                forward_geom
+            )
+
+            candidates.append(
+                {
+                    "priority": priority,
+                    "distance": distance,
+                    "pipe_fid": pipe_fid,
+                    "pipe_name": pipe_name,
+                    "position": forward_geom,
+                    "direction": "от начала",
+                    "line_length": line_length
+                }
+            )
+
+
+        # =================================================
+        # КИЛОМЕТРАЖ ОТ ДРУГОГО КОНЦА
+        # =================================================
+
+        reverse_position = (
+            line_length - km_meters
+        )
+
+        if reverse_position >= 0:
+
+            reverse_geom = pipe_geom.interpolate(
+                reverse_position
+            )
+
+            if not reverse_geom.isEmpty():
+
+                distance = point_geom.distance(
+                    reverse_geom
+                )
+
+                candidates.append(
+                    {
+                        "priority": priority,
+                        "distance": distance,
+                        "pipe_fid": pipe_fid,
+                        "pipe_name": pipe_name,
+                        "position": reverse_geom,
+                        "direction": "от другого конца",
+                        "line_length": line_length
+                    }
+                )
+
+
+    # =====================================================
+    # НИЧЕГО НЕ НАШЛИ
+    # =====================================================
+
+    if not candidates:
+
+        print(f"Точка:   {point_name}")
+        print(f"Маршрут: {route_name}")
+        print(f"Отметка: {km_value} км")
+        print("")
+        print(
+            "Подходящая линия не найдена."
+        )
+        print(
+            "Точка НЕ перемещена."
+        )
+
+        not_found_count += 1
+        continue
+
+
+    # =====================================================
+    # СНАЧАЛА ЛУЧШИЙ ТИП НАЗВАНИЯ
+    # =====================================================
+
+    best_priority = min(
+        item["priority"]
+        for item in candidates
+    )
+
+
+    # Оставляем ТОЛЬКО кандидатов
+    # лучшего класса
+    best_name_candidates = [
+        item
+        for item in candidates
+        if item["priority"] == best_priority
+    ]
+
+
+    # =====================================================
+    # И ТОЛЬКО ТЕПЕРЬ СМОТРИМ РАССТОЯНИЕ
+    # =====================================================
+
+    best_name_candidates.sort(
+        key=lambda item: item["distance"]
+    )
+
+    best = best_name_candidates[0]
+
+
+    # =====================================================
+    # ПЕРЕНОС ТОЧКИ
+    # =====================================================
+
+    new_point = best[
+        "position"
+    ].asPoint()
+
+    new_geometry = QgsGeometry.fromPointXY(
+        QgsPointXY(
+            new_point.x(),
+            new_point.y()
+        )
+    )
+
+
+    success = points.changeGeometry(
+        point_feature.id(),
+        new_geometry
+    )
+
+
+    if not success:
+
+        print(
+            f"Не удалось изменить "
+            f"геометрию {point_name}"
+        )
+
+        error_count += 1
+        continue
+
+
+    moved_count += 1
+
+
+    # =====================================================
+    # ОТЧЁТ
+    # =====================================================
+
+    print(f"Точка:           {point_name}")
+    print(f"Маршрут:         {route_name}")
+    print(f"Отметка:         {km_value} км")
+
+    print("")
+    print(
+        f"Выбрана линия:   "
+        f"{best['pipe_name']}"
+    )
+
+    print(
+        f"Приоритет имени: "
+        f"{best['priority']}"
+    )
+
+    print(
+        f"Отсчёт:          "
+        f"{best['direction']}"
+    )
+
+    print(
+        f"Смещение:        "
+        f"{best['distance'] / 1000:.3f} км"
+    )
+
+
+    # =====================================================
+    # ПОКАЗЫВАЕМ ВСЕ ВАРИАНТЫ
+    # =====================================================
+
+    print("")
+    print("Найденные варианты:")
+
+    candidates.sort(
+        key=lambda item: (
+            item["priority"],
+            item["distance"]
+        )
+    )
+
+    shown = set()
+
+    for candidate in candidates:
+
+        key = (
+            candidate["pipe_name"],
+            candidate["direction"]
+        )
+
+        if key in shown:
+            continue
+
+        shown.add(key)
+
+        print(
+            f"  {candidate['pipe_name']} | "
+            f"приоритет={candidate['priority']} | "
+            f"{candidate['direction']} | "
+            f"{candidate['distance'] / 1000:.3f} км"
+        )
+
+
+    if best["distance"] > WARNING_DISTANCE_M:
+
+        print("")
+        print(
+            "!!! БОЛЬШОЕ СМЕЩЕНИЕ: "
+            f"{best['distance'] / 1000:.1f} км"
+        )
+
+        print(
+            "Точка перенесена, "
+            "но результат нужно проверить."
+        )
+
+
+# =========================================================
+# ОБНОВЛЕНИЕ
+# =========================================================
+
+points.triggerRepaint()
+
+
+# =========================================================
+# ИТОГ
+# =========================================================
+
+print("\n" + "=" * 80)
+print("ГОТОВО")
+print("=" * 80)
+
+print(f"Перемещено: {moved_count}")
+print(f"Не найдено: {not_found_count}")
+print(f"Ошибок:     {error_count}")
+
+print("")
+print(
+    "Изменения автоматически НЕ сохранены."
+)
+
+print("=" * 80)
