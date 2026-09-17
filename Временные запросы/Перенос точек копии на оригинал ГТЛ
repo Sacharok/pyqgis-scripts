@@ -1,0 +1,348 @@
+from qgis.core import (
+    QgsProject,
+    QgsGeometry
+)
+
+
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
+
+COPY_LAYER_NAME = "Копия точек"
+ORIGINAL_LAYER_NAME = "GtsPoints"
+
+ID_FIELD = "Id"
+
+
+# ============================================================
+# СЛОИ
+# ============================================================
+
+copy_layers = QgsProject.instance().mapLayersByName(
+    COPY_LAYER_NAME
+)
+
+original_layers = QgsProject.instance().mapLayersByName(
+    ORIGINAL_LAYER_NAME
+)
+
+if not copy_layers:
+    raise Exception(
+        f"Не найден слой '{COPY_LAYER_NAME}'"
+    )
+
+if not original_layers:
+    raise Exception(
+        f"Не найден слой '{ORIGINAL_LAYER_NAME}'"
+    )
+
+copy_layer = copy_layers[0]
+original_layer = original_layers[0]
+
+
+# ============================================================
+# ПРОВЕРКИ
+# ============================================================
+
+if copy_layer.fields().indexFromName(ID_FIELD) == -1:
+    raise Exception(
+        f"В '{COPY_LAYER_NAME}' нет поля '{ID_FIELD}'"
+    )
+
+if original_layer.fields().indexFromName(ID_FIELD) == -1:
+    raise Exception(
+        f"В '{ORIGINAL_LAYER_NAME}' нет поля '{ID_FIELD}'"
+    )
+
+if copy_layer.crs() != original_layer.crs():
+    raise Exception(
+        "CRS слоёв не совпадают:\n"
+        f"{COPY_LAYER_NAME}: {copy_layer.crs().authid()}\n"
+        f"{ORIGINAL_LAYER_NAME}: {original_layer.crs().authid()}"
+    )
+
+
+# ============================================================
+# СОЗДАЁМ ИНДЕКС GtsPoints ПО Id
+# ============================================================
+
+original_by_id = {}
+
+duplicate_original_ids = set()
+
+
+for feature in original_layer.getFeatures():
+
+    value = feature[ID_FIELD]
+
+    if value is None:
+        continue
+
+    key = str(value).strip()
+
+    if not key:
+        continue
+
+    if key in original_by_id:
+
+        duplicate_original_ids.add(
+            key
+        )
+
+    else:
+
+        original_by_id[key] = feature.id()
+
+
+# ============================================================
+# ПРОВЕРЯЕМ ДУБЛИКАТЫ В КОПИИ
+# ============================================================
+
+copy_seen_ids = set()
+duplicate_copy_ids = set()
+
+
+for feature in copy_layer.getFeatures():
+
+    value = feature[ID_FIELD]
+
+    if value is None:
+        continue
+
+    key = str(value).strip()
+
+    if not key:
+        continue
+
+    if key in copy_seen_ids:
+
+        duplicate_copy_ids.add(
+            key
+        )
+
+    else:
+
+        copy_seen_ids.add(
+            key
+        )
+
+
+# ============================================================
+# РЕДАКТИРОВАНИЕ GtsPoints
+# ============================================================
+
+if not original_layer.isEditable():
+
+    if not original_layer.startEditing():
+
+        raise Exception(
+            f"Не удалось включить редактирование "
+            f"слоя '{ORIGINAL_LAYER_NAME}'"
+        )
+
+
+# ============================================================
+# ПЕРЕНОС ВСЕХ ГЕОМЕТРИЙ
+# Копия точек -> GtsPoints
+# ============================================================
+
+moved = 0
+not_found = 0
+no_id = 0
+no_geometry = 0
+duplicates = 0
+errors = 0
+
+changed_fids = []
+
+
+for copy_feature in copy_layer.getFeatures():
+
+    value = copy_feature[ID_FIELD]
+
+    # --------------------------------------------------------
+    # НЕТ Id
+    # --------------------------------------------------------
+
+    if value is None:
+
+        no_id += 1
+        continue
+
+
+    key = str(value).strip()
+
+
+    if not key:
+
+        no_id += 1
+        continue
+
+
+    # --------------------------------------------------------
+    # ДУБЛИКАТ Id
+    # --------------------------------------------------------
+
+    if (
+        key in duplicate_copy_ids
+        or
+        key in duplicate_original_ids
+    ):
+
+        duplicates += 1
+
+        print(
+            f"ПРОПУСК: Id={key} — дубликат"
+        )
+
+        continue
+
+
+    # --------------------------------------------------------
+    # НЕТ ТАКОГО Id В GtsPoints
+    # --------------------------------------------------------
+
+    if key not in original_by_id:
+
+        not_found += 1
+
+        print(
+            f"НЕ НАЙДЕН в GtsPoints: Id={key}"
+        )
+
+        continue
+
+
+    # --------------------------------------------------------
+    # НЕТ ГЕОМЕТРИИ В КОПИИ
+    # --------------------------------------------------------
+
+    if not copy_feature.hasGeometry():
+
+        no_geometry += 1
+
+        print(
+            f"НЕТ ГЕОМЕТРИИ: Id={key}"
+        )
+
+        continue
+
+
+    source_geom = copy_feature.geometry()
+
+
+    if source_geom.isEmpty():
+
+        no_geometry += 1
+
+        print(
+            f"ПУСТАЯ ГЕОМЕТРИЯ: Id={key}"
+        )
+
+        continue
+
+
+    # --------------------------------------------------------
+    # ПРИСВАИВАЕМ ГЕОМЕТРИЮ ОРИГИНАЛУ
+    # --------------------------------------------------------
+
+    original_fid = original_by_id[key]
+
+
+    success = original_layer.changeGeometry(
+        original_fid,
+        QgsGeometry(source_geom)
+    )
+
+
+    if not success:
+
+        errors += 1
+
+        print(
+            f"ОШИБКА изменения: Id={key}"
+        )
+
+        continue
+
+
+    moved += 1
+
+    changed_fids.append(
+        original_fid
+    )
+
+
+# ============================================================
+# ОБНОВЛЕНИЕ
+# ============================================================
+
+original_layer.triggerRepaint()
+
+
+# Выделяем в оригинале всё,
+# что реально было изменено
+original_layer.removeSelection()
+
+if changed_fids:
+
+    original_layer.selectByIds(
+        changed_fids
+    )
+
+
+# ============================================================
+# ИТОГ
+# ============================================================
+
+print("")
+print("=" * 90)
+print("ПЕРЕНОС КОПИЯ ТОЧЕК -> GtsPoints ЗАВЕРШЁН")
+print("=" * 90)
+
+print(
+    f"Объектов в копии:        "
+    f"{copy_layer.featureCount()}"
+)
+
+print(
+    f"Геометрия перенесена:    "
+    f"{moved}"
+)
+
+print(
+    f"Нет соответствия по Id:  "
+    f"{not_found}"
+)
+
+print(
+    f"Нет Id:                  "
+    f"{no_id}"
+)
+
+print(
+    f"Нет геометрии:           "
+    f"{no_geometry}"
+)
+
+print(
+    f"Дубликаты Id:            "
+    f"{duplicates}"
+)
+
+print(
+    f"Ошибки изменения:        "
+    f"{errors}"
+)
+
+print("")
+print(
+    "Изменения автоматически НЕ сохранены."
+)
+
+print(
+    "После проверки сохрани редактирование "
+    "слоя GtsPoints вручную."
+)
+
+print("=" * 90)
