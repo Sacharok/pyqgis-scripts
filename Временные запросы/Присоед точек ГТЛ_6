@@ -1,19 +1,19 @@
 import re
 import math
+import heapq
+from statistics import median
 
 from qgis.core import (
     QgsProject,
     QgsGeometry,
     QgsPointXY,
-    QgsRectangle,
-    QgsSpatialIndex,
     QgsDistanceArea
 )
 
 
-# =========================================================
+# ============================================================
 # НАСТРОЙКИ
-# =========================================================
+# ============================================================
 
 POINT_LAYER_NAME = "Копия точек"
 PIPE_LAYER_NAME = "pipeline_1"
@@ -21,44 +21,49 @@ PIPE_LAYER_NAME = "pipeline_1"
 POINT_NAME_FIELD = "Name"
 PIPE_NAME_FIELD = "name"
 
-# Допуск соединения концов линий.
-# Это единицы EPSG:3857.
+# Соединяем линии только если их КОНЦЫ находятся
+# не дальше этого значения друг от друга.
 #
-# Начинаем с малого допуска, чтобы случайно
-# не соединить соседние параллельные трубопроводы.
+# Слои EPSG:3857.
+# Начинаем с маленького допуска.
 CONNECT_TOLERANCE = 5.0
 
+# Сколько лучших вариантов выводить
+TOP_CANDIDATES = 10
 
-# =========================================================
+
+# ============================================================
 # НОРМАЛИЗАЦИЯ НАЗВАНИЙ
-# =========================================================
+# ============================================================
 
 def normalize_name(value):
 
     if value is None:
         return ""
 
-    value = str(value).strip().lower()
-    value = value.replace("ё", "е")
+    text = str(value).strip().lower()
+    text = text.replace("ё", "е")
 
     return re.sub(
         r"[^0-9a-zа-я]+",
         "",
-        value
+        text
     )
 
 
-# =========================================================
+# ============================================================
 # РАЗБОР НАЗВАНИЯ ТОЧКИ
-# =========================================================
+# ============================================================
 
 def parse_point_name(value):
     """
     Работает в том числе с:
 
-    37,5 км КС Нюксеница-Архангельск
+    177 км Елец-Новопсков-Североставропольская СПХГ
 
     ТСГ 31 км УКПГ-15-КС Ямбургская
+
+    37,5 км КС Нюксеница-Архангельск
     """
 
     if value is None:
@@ -86,165 +91,28 @@ def parse_point_name(value):
     return km_value, route_name
 
 
-# =========================================================
-# ПРИОРИТЕТ ИМЕНИ
-# =========================================================
+# ============================================================
+# ПРОВЕРКА ПУСТОГО NAME
+# ============================================================
 
-def name_priority(route_norm, pipe_norm):
+def is_empty_name(value):
 
-    if not pipe_norm:
-        return None
+    if value is None:
+        return True
 
-    # Полное совпадение
-    if pipe_norm == route_norm:
-        return 0
+    text = str(value).strip().lower()
 
-    if not pipe_norm.startswith(route_norm):
-        return None
-
-    suffix = pipe_norm[len(route_norm):]
-
-    if not suffix:
-        return 0
-
-    # Предпочитаем первую нитку
-    if suffix == "1":
-        return 1
-
-    if suffix.isdigit():
-
-        number = int(suffix)
-
-        if number == 1:
-            return 1
-
-        return number * 10
-
-    # Например:
-    # 2ямал
-    match = re.match(
-        r"^(\d+)(.*)$",
-        suffix
-    )
-
-    if match:
-
-        number = int(match.group(1))
-        extra = match.group(2)
-
-        priority = number * 10
-
-        if extra:
-            priority += 100
-
-        return priority
-
-    return 500
-
-
-# =========================================================
-# КОНЦЫ ЛИНИИ + СОСЕДНЯЯ ВЕРШИНА
-# =========================================================
-
-def geometry_ends(geom):
-    """
-    Возвращает концы линий.
-
-    Для каждого конца:
-        point = сам конец
-        inner = следующая вершина внутрь линии
-
-    Это понадобится ещё и для анализа направления.
-    """
-
-    result = []
-
-    if geom.isMultipart():
-        parts = geom.asMultiPolyline()
-    else:
-        parts = [geom.asPolyline()]
-
-    for part in parts:
-
-        if len(part) < 2:
-            continue
-
-        result.append({
-            "point": QgsPointXY(part[0]),
-            "inner": QgsPointXY(part[1])
-        })
-
-        result.append({
-            "point": QgsPointXY(part[-1]),
-            "inner": QgsPointXY(part[-2])
-        })
-
-    return result
-
-
-# =========================================================
-# РАССТОЯНИЕ В КООРДИНАТАХ СЛОЯ
-# Только для проверки соединения концов.
-# =========================================================
-
-def map_distance(p1, p2):
-
-    dx = p1.x() - p2.x()
-    dy = p1.y() - p2.y()
-
-    return math.sqrt(
-        dx * dx + dy * dy
+    return text in (
+        "",
+        "null",
+        "none",
+        "<null>"
     )
 
 
-# =========================================================
-# УГОЛ ПРОДОЛЖЕНИЯ
-# =========================================================
-
-def continuation_angle(
-    current_inner,
-    node,
-    candidate_inner
-):
-    """
-    0°   = практически прямое продолжение.
-    90°  = поворот под прямым углом.
-    180° = возврат назад.
-    """
-
-    # Направление, с которым мы пришли в узел
-    ax = node.x() - current_inner.x()
-    ay = node.y() - current_inner.y()
-
-    # Направление, которым кандидат уходит из узла
-    bx = candidate_inner.x() - node.x()
-    by = candidate_inner.y() - node.y()
-
-    len_a = math.hypot(ax, ay)
-    len_b = math.hypot(bx, by)
-
-    if len_a == 0 or len_b == 0:
-        return None
-
-    cos_value = (
-        ax * bx + ay * by
-    ) / (
-        len_a * len_b
-    )
-
-    cos_value = max(
-        -1.0,
-        min(1.0, cos_value)
-    )
-
-    return math.degrees(
-        math.acos(cos_value)
-    )
-
-
-# =========================================================
+# ============================================================
 # СЛОИ
-# =========================================================
+# ============================================================
 
 point_layers = QgsProject.instance().mapLayersByName(
     POINT_LAYER_NAME
@@ -253,6 +121,7 @@ point_layers = QgsProject.instance().mapLayersByName(
 pipe_layers = QgsProject.instance().mapLayersByName(
     PIPE_LAYER_NAME
 )
+
 
 if not point_layers:
     raise Exception(
@@ -264,88 +133,74 @@ if not pipe_layers:
         f"Не найден слой '{PIPE_LAYER_NAME}'"
     )
 
+
 points = point_layers[0]
 pipes = pipe_layers[0]
 
 
-# =========================================================
-# ПРОВЕРКА ВЫДЕЛЕНИЯ
-# =========================================================
+# ============================================================
+# ВЫБРАННАЯ ТОЧКА
+# ============================================================
 
-selected_points = points.selectedFeatures()
+selected = points.selectedFeatures()
 
-if len(selected_points) != 1:
+if len(selected) != 1:
+
     raise Exception(
-        "Для этого теста выдели ровно ОДНУ "
-        "точку в слое 'Копия точек'."
-    )
-
-point_feature = selected_points[0]
-
-if not point_feature.hasGeometry():
-    raise Exception(
-        "У выбранной точки нет геометрии."
+        "Для теста выдели ровно ОДНУ точку "
+        "в слое 'Копия точек'."
     )
 
 
-# =========================================================
-# ЧИТАЕМ ТОЧКУ
-# =========================================================
+selected_point = selected[0]
 
-point_name = point_feature[
+selected_name = selected_point[
     POINT_NAME_FIELD
 ]
 
-km_value, route_name = parse_point_name(
-    point_name
+
+selected_km, selected_route = parse_point_name(
+    selected_name
 )
 
-if km_value is None:
+
+if selected_km is None:
+
     raise Exception(
         f"Не удалось разобрать название точки: "
-        f"{point_name}"
+        f"{selected_name}"
     )
 
-route_norm = normalize_name(
-    route_name
-)
 
-old_point = QgsPointXY(
-    point_feature.geometry().asPoint()
+selected_route_norm = normalize_name(
+    selected_route
 )
 
 
-print("")
-print("=" * 90)
-print("ТЕСТ ПОСТРОЕНИЯ ЦЕПОЧКИ")
-print("=" * 90)
+# ============================================================
+# СОБИРАЕМ ВСЕ ТОЧКИ ЭТОГО ЖЕ МАРШРУТА
+# ============================================================
 
-print(
-    f"Точка:      {point_name}"
-)
-
-print(
-    f"Маршрут:    {route_name}"
-)
-
-print(
-    f"Отметка:    {km_value} км"
-)
+route_points = []
 
 
-# =========================================================
-# ЗАГРУЖАЕМ pipeline_1
-# =========================================================
-
-features = {}
-endpoints = {}
-
-spatial_index = QgsSpatialIndex()
-
-
-for feature in pipes.getFeatures():
+for feature in points.getFeatures():
 
     if not feature.hasGeometry():
+        continue
+
+    value = feature[
+        POINT_NAME_FIELD
+    ]
+
+    km_value, route_name = parse_point_name(
+        value
+    )
+
+    if km_value is None:
+        continue
+
+    if normalize_name(route_name) != selected_route_norm:
         continue
 
     geom = feature.geometry()
@@ -353,346 +208,62 @@ for feature in pipes.getFeatures():
     if geom.isEmpty():
         continue
 
-    fid = feature.id()
-
-    raw_name = feature[
-        PIPE_NAME_FIELD
-    ]
-
-    if raw_name is None:
-        pipe_name = ""
-    else:
-        pipe_name = str(
-            raw_name
-        ).strip()
-
-    pipe_norm = normalize_name(
-        pipe_name
-    )
-
-    features[fid] = {
-        "feature": feature,
-        "name": pipe_name,
-        "norm": pipe_norm,
-        "geometry": geom
-    }
-
-    endpoints[fid] = geometry_ends(
-        geom
-    )
-
-    spatial_index.addFeature(
-        feature
+    route_points.append(
+        {
+            "fid": feature.id(),
+            "name": str(value),
+            "km": km_value,
+            "point": QgsPointXY(
+                geom.asPoint()
+            )
+        }
     )
 
 
-# =========================================================
-# ИЩЕМ ПРЕДПОЧТИТЕЛЬНОЕ ПОЛНОЕ ИМЯ
-# =========================================================
-
-named_candidates = []
-
-for fid, data in features.items():
-
-    if not data["norm"]:
-        continue
-
-    priority = name_priority(
-        route_norm,
-        data["norm"]
-    )
-
-    if priority is None:
-        continue
-
-    distance = (
-        point_feature
-        .geometry()
-        .distance(
-            data["geometry"]
-        )
-    )
-
-    named_candidates.append({
-        "fid": fid,
-        "name": data["name"],
-        "norm": data["norm"],
-        "priority": priority,
-        "distance": distance
-    })
+route_points.sort(
+    key=lambda item: item["km"]
+)
 
 
-if not named_candidates:
+if not route_points:
 
     raise Exception(
-        f"Для маршрута '{route_name}' "
-        f"не найдено ни одного именованного "
-        f"объекта pipeline_1."
+        "Не найдено точек этого маршрута."
     )
-
-
-# Сначала выбираем лучший вариант имени
-best_priority = min(
-    item["priority"]
-    for item in named_candidates
-)
-
-best_named = [
-    item
-    for item in named_candidates
-    if item["priority"] == best_priority
-]
-
-
-# Из лучшего класса выбираем фрагмент,
-# расположенный ближе к исходной точке.
-best_named.sort(
-    key=lambda x: x["distance"]
-)
-
-seed = best_named[0]
-
-TARGET_PIPE_NAME = seed["name"]
-TARGET_PIPE_NORM = seed["norm"]
-SEED_FID = seed["fid"]
 
 
 print("")
+print("=" * 100)
+print("ПОИСК БЕЗЫМЯННОЙ ТРАССЫ")
+print("=" * 100)
+
 print(
-    f"Выбран тип трассы: "
-    f"{TARGET_PIPE_NAME}"
+    f"Маршрут: {selected_route}"
 )
 
 print(
-    f"Стартовый FID:     "
-    f"{SEED_FID}"
+    f"Выбранная отметка: "
+    f"{selected_km} км"
+)
+
+print(
+    f"Точек этого маршрута найдено: "
+    f"{len(route_points)}"
 )
 
 print("")
-print(
-    "Разрешено проходить только по:"
-)
 
-print(
-    f"  • '{TARGET_PIPE_NAME}'"
-)
+for rp in route_points:
 
-print(
-    "  • объектам с пустым name / NULL"
-)
-
-
-# =========================================================
-# ФУНКЦИЯ ПОИСКА СОСЕДЕЙ У КОНЦА
-# =========================================================
-
-def neighbors_at_endpoint(
-    current_fid,
-    endpoint_info,
-    visited
-):
-
-    node = endpoint_info["point"]
-
-    rect = QgsRectangle(
-        node.x() - CONNECT_TOLERANCE,
-        node.y() - CONNECT_TOLERANCE,
-        node.x() + CONNECT_TOLERANCE,
-        node.y() + CONNECT_TOLERANCE
-    )
-
-    possible_fids = (
-        spatial_index
-        .intersects(rect)
-    )
-
-    result = []
-
-
-    for candidate_fid in possible_fids:
-
-        if candidate_fid == current_fid:
-            continue
-
-        if candidate_fid in visited:
-            continue
-
-        candidate = features[
-            candidate_fid
-        ]
-
-
-        # -------------------------------------------------
-        # Разрешаем:
-        #
-        # 1. точно такую же нитку;
-        # 2. NULL / пустое имя.
-        #
-        # Никакие другие именованные линии
-        # автоматически не берём.
-        # -------------------------------------------------
-
-        candidate_norm = candidate[
-            "norm"
-        ]
-
-        if (
-            candidate_norm
-            and candidate_norm
-            != TARGET_PIPE_NORM
-        ):
-            continue
-
-
-        # -------------------------------------------------
-        # Проверяем именно КОНЕЦ линии,
-        # а не просто прохождение линии рядом.
-        # -------------------------------------------------
-
-        for candidate_end in endpoints[
-            candidate_fid
-        ]:
-
-            dist = map_distance(
-                node,
-                candidate_end["point"]
-            )
-
-            if dist <= CONNECT_TOLERANCE:
-
-                angle = continuation_angle(
-                    endpoint_info["inner"],
-                    node,
-                    candidate_end["inner"]
-                )
-
-                result.append({
-                    "fid": candidate_fid,
-                    "name": candidate[
-                        "name"
-                    ],
-                    "distance": dist,
-                    "angle": angle
-                })
-
-                # Один объект достаточно
-                # добавить один раз.
-                break
-
-
-    # Защита от дубликатов
-    unique = {}
-
-    for item in result:
-        unique[item["fid"]] = item
-
-    return list(
-        unique.values()
+    print(
+        f"  {rp['km']:10.3f} км | "
+        f"{rp['name']}"
     )
 
 
-# =========================================================
-# ТРАССИРОВКА
-# =========================================================
-
-visited = set()
-
-queue = [
-    SEED_FID
-]
-
-branches = []
-
-
-while queue:
-
-    current_fid = queue.pop(0)
-
-    if current_fid in visited:
-        continue
-
-    visited.add(
-        current_fid
-    )
-
-
-    for endpoint_info in endpoints[
-        current_fid
-    ]:
-
-        candidates = neighbors_at_endpoint(
-            current_fid,
-            endpoint_info,
-            visited
-        )
-
-
-        # ---------------------------------------------
-        # Нет продолжения
-        # ---------------------------------------------
-
-        if len(candidates) == 0:
-            continue
-
-
-        # ---------------------------------------------
-        # Одно продолжение:
-        # можно идти автоматически.
-        # ---------------------------------------------
-
-        if len(candidates) == 1:
-
-            next_fid = candidates[
-                0
-            ]["fid"]
-
-            if next_fid not in visited:
-                queue.append(
-                    next_fid
-                )
-
-            continue
-
-
-        # ---------------------------------------------
-        # ДВА ИЛИ БОЛЕЕ:
-        # НЕ ВЫБИРАЕМ.
-        # Это развилка.
-        # ---------------------------------------------
-
-        candidates.sort(
-            key=lambda x: (
-                999
-                if x["angle"] is None
-                else x["angle"]
-            )
-        )
-
-        branches.append({
-            "from_fid": current_fid,
-            "node": endpoint_info[
-                "point"
-            ],
-            "candidates": candidates
-        })
-
-
-# =========================================================
-# ВЫДЕЛЯЕМ НАЙДЕННУЮ ОДНОЗНАЧНУЮ ЦЕПОЧКУ
-# =========================================================
-
-pipes.removeSelection()
-
-pipes.selectByIds(
-    list(visited)
-)
-
-pipes.triggerRepaint()
-
-
-# =========================================================
-# РЕАЛЬНАЯ ДЛИНА НАЙДЕННОЙ ЦЕПОЧКИ
-# =========================================================
+# ============================================================
+# РЕАЛЬНЫЕ РАССТОЯНИЯ
+# ============================================================
 
 distance_area = QgsDistanceArea()
 
@@ -705,176 +276,1221 @@ distance_area.setEllipsoid(
     "WGS84"
 )
 
-total_length = 0.0
 
-named_count = 0
-null_count = 0
+def real_distance(p1, p2):
+
+    return distance_area.measureLine(
+        QgsPointXY(p1),
+        QgsPointXY(p2)
+    )
 
 
-for fid in visited:
+def real_line_length(geom):
 
-    data = features[fid]
+    return distance_area.measureLength(
+        geom
+    )
 
-    try:
-        total_length += (
-            distance_area.measureLength(
-                data["geometry"]
+
+# ============================================================
+# УЗЛЫ ГРАФА
+#
+# Объединяем только КОНЦЫ линий,
+# а не линии, которые просто проходят рядом.
+# ============================================================
+
+nodes = {}
+grid = {}
+
+next_node_id = 0
+
+
+def grid_key(point):
+
+    return (
+        int(math.floor(
+            point.x() / CONNECT_TOLERANCE
+        )),
+        int(math.floor(
+            point.y() / CONNECT_TOLERANCE
+        ))
+    )
+
+
+def map_distance(p1, p2):
+
+    return math.hypot(
+        p1.x() - p2.x(),
+        p1.y() - p2.y()
+    )
+
+
+def get_or_create_node(point):
+
+    global next_node_id
+
+    key = grid_key(point)
+
+    # Проверяем соседние клетки,
+    # чтобы не потерять точку на границе клетки.
+    for dx in (-1, 0, 1):
+
+        for dy in (-1, 0, 1):
+
+            test_key = (
+                key[0] + dx,
+                key[1] + dy
+            )
+
+            for node_id in grid.get(
+                test_key,
+                []
+            ):
+
+                existing = nodes[
+                    node_id
+                ]
+
+                if (
+                    map_distance(
+                        point,
+                        existing["point"]
+                    )
+                    <= CONNECT_TOLERANCE
+                ):
+
+                    return node_id
+
+
+    node_id = next_node_id
+    next_node_id += 1
+
+    nodes[node_id] = {
+        "point": QgsPointXY(point)
+    }
+
+    grid.setdefault(
+        key,
+        []
+    ).append(
+        node_id
+    )
+
+    return node_id
+
+
+# ============================================================
+# РЁБРА ГРАФА:
+# ТОЛЬКО pipeline_1 С NULL / ПУСТЫМ NAME
+# ============================================================
+
+edges = []
+
+adjacency = {}
+
+
+def add_adjacency(node, edge_id):
+
+    adjacency.setdefault(
+        node,
+        []
+    ).append(
+        edge_id
+    )
+
+
+for feature in pipes.getFeatures():
+
+    if not feature.hasGeometry():
+        continue
+
+    raw_name = feature[
+        PIPE_NAME_FIELD
+    ]
+
+    # Для этого теста рассматриваем
+    # только безымянные линии.
+    if not is_empty_name(raw_name):
+        continue
+
+
+    geom = feature.geometry()
+
+    if geom.isEmpty():
+        continue
+
+
+    if geom.isMultipart():
+
+        parts = geom.asMultiPolyline()
+
+    else:
+
+        parts = [
+            geom.asPolyline()
+        ]
+
+
+    for part_number, part in enumerate(parts):
+
+        if len(part) < 2:
+            continue
+
+
+        coords = [
+            QgsPointXY(p)
+            for p in part
+        ]
+
+
+        start_node = get_or_create_node(
+            coords[0]
+        )
+
+        end_node = get_or_create_node(
+            coords[-1]
+        )
+
+
+        part_geom = QgsGeometry.fromPolylineXY(
+            coords
+        )
+
+
+        length_m = real_line_length(
+            part_geom
+        )
+
+
+        edge_id = len(edges)
+
+
+        edges.append(
+            {
+                "fid": feature.id(),
+                "part": part_number,
+                "n1": start_node,
+                "n2": end_node,
+                "coords": coords,
+                "length": length_m
+            }
+        )
+
+
+        add_adjacency(
+            start_node,
+            edge_id
+        )
+
+        add_adjacency(
+            end_node,
+            edge_id
+        )
+
+
+print("")
+print(
+    f"Безымянных линейных частей: "
+    f"{len(edges)}"
+)
+
+print(
+    f"Узлов графа: "
+    f"{len(nodes)}"
+)
+
+
+if not edges:
+
+    raise Exception(
+        "В pipeline_1 не найдено "
+        "безымянных линий."
+    )
+
+
+# ============================================================
+# СВЯЗНЫЕ КОМПОНЕНТЫ
+# ============================================================
+
+visited_edges = set()
+
+components = []
+
+
+for first_edge in range(len(edges)):
+
+    if first_edge in visited_edges:
+        continue
+
+
+    component_edges = set()
+    component_nodes = set()
+
+    stack = [
+        first_edge
+    ]
+
+
+    while stack:
+
+        edge_id = stack.pop()
+
+        if edge_id in visited_edges:
+            continue
+
+        visited_edges.add(
+            edge_id
+        )
+
+        component_edges.add(
+            edge_id
+        )
+
+        edge = edges[
+            edge_id
+        ]
+
+
+        for node_id in (
+            edge["n1"],
+            edge["n2"]
+        ):
+
+            component_nodes.add(
+                node_id
+            )
+
+            for next_edge in adjacency.get(
+                node_id,
+                []
+            ):
+
+                if next_edge not in visited_edges:
+
+                    stack.append(
+                        next_edge
+                    )
+
+
+    components.append(
+        {
+            "edges": component_edges,
+            "nodes": component_nodes
+        }
+    )
+
+
+print(
+    f"Связных безымянных компонентов: "
+    f"{len(components)}"
+)
+
+
+# ============================================================
+# DIJKSTRA
+# ============================================================
+
+def dijkstra(
+    start_node,
+    allowed_edges
+):
+
+    distances = {
+        start_node: 0.0
+    }
+
+    previous = {}
+
+    queue = [
+        (0.0, start_node)
+    ]
+
+
+    while queue:
+
+        current_dist, node = heapq.heappop(
+            queue
+        )
+
+        if (
+            current_dist
+            != distances.get(node)
+        ):
+            continue
+
+
+        for edge_id in adjacency.get(
+            node,
+            []
+        ):
+
+            if edge_id not in allowed_edges:
+                continue
+
+            edge = edges[
+                edge_id
+            ]
+
+
+            if edge["n1"] == node:
+                other = edge["n2"]
+            else:
+                other = edge["n1"]
+
+
+            new_dist = (
+                current_dist
+                + edge["length"]
+            )
+
+
+            if (
+                other not in distances
+                or
+                new_dist
+                < distances[other]
+            ):
+
+                distances[other] = new_dist
+
+                previous[other] = (
+                    node,
+                    edge_id
+                )
+
+                heapq.heappush(
+                    queue,
+                    (
+                        new_dist,
+                        other
+                    )
+                )
+
+
+    return distances, previous
+
+
+# ============================================================
+# ДИАМЕТР / ОСНОВНАЯ ЦЕПОЧКА КОМПОНЕНТА
+#
+# Для дерева это самый длинный путь.
+# Маленькие боковые ветки обычно остаются за пределами.
+# ============================================================
+
+def component_main_path(component):
+
+    component_nodes = component[
+        "nodes"
+    ]
+
+    component_edges = component[
+        "edges"
+    ]
+
+
+    if not component_nodes:
+        return None
+
+
+    start = next(
+        iter(component_nodes)
+    )
+
+
+    distances, _ = dijkstra(
+        start,
+        component_edges
+    )
+
+
+    if not distances:
+        return None
+
+
+    node_a = max(
+        distances,
+        key=distances.get
+    )
+
+
+    distances, previous = dijkstra(
+        node_a,
+        component_edges
+    )
+
+
+    node_b = max(
+        distances,
+        key=distances.get
+    )
+
+
+    # Восстанавливаем путь
+    path_edges_rev = []
+    path_nodes_rev = [
+        node_b
+    ]
+
+    current = node_b
+
+
+    while current != node_a:
+
+        if current not in previous:
+            return None
+
+        prev_node, edge_id = previous[
+            current
+        ]
+
+        path_edges_rev.append(
+            edge_id
+        )
+
+        current = prev_node
+
+        path_nodes_rev.append(
+            current
+        )
+
+
+    path_edges = list(
+        reversed(
+            path_edges_rev
+        )
+    )
+
+    path_nodes = list(
+        reversed(
+            path_nodes_rev
+        )
+    )
+
+
+    return (
+        path_nodes,
+        path_edges
+    )
+
+
+# ============================================================
+# СОБИРАЕМ КООРДИНАТЫ ПУТИ В ПРАВИЛЬНОМ ПОРЯДКЕ
+# ============================================================
+
+def build_path_coords(
+    path_nodes,
+    path_edges
+):
+
+    result = []
+
+
+    for i, edge_id in enumerate(
+        path_edges
+    ):
+
+        edge = edges[
+            edge_id
+        ]
+
+        from_node = path_nodes[
+            i
+        ]
+
+        to_node = path_nodes[
+            i + 1
+        ]
+
+
+        if (
+            edge["n1"] == from_node
+            and
+            edge["n2"] == to_node
+        ):
+
+            coords = edge[
+                "coords"
+            ]
+
+        else:
+
+            coords = list(
+                reversed(
+                    edge["coords"]
+                )
+            )
+
+
+        if not result:
+
+            result.extend(
+                coords
+            )
+
+        else:
+
+            # Если из-за допуска концы немного
+            # различаются, соединение добавится
+            # коротким техническим сегментом.
+            if (
+                result[-1].x()
+                != coords[0].x()
+                or
+                result[-1].y()
+                != coords[0].y()
+            ):
+
+                result.append(
+                    coords[0]
+                )
+
+
+            result.extend(
+                coords[1:]
+            )
+
+
+    return result
+
+
+# ============================================================
+# ПОДГОТАВЛИВАЕМ СЕГМЕНТЫ ПУТИ
+# ============================================================
+
+def prepare_path_segments(coords):
+
+    segments = []
+
+    accumulated = 0.0
+
+
+    for i in range(
+        len(coords) - 1
+    ):
+
+        p1 = coords[i]
+        p2 = coords[i + 1]
+
+
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+
+        map_len_sq = (
+            dx * dx
+            + dy * dy
+        )
+
+
+        if map_len_sq == 0:
+            continue
+
+
+        real_len = real_distance(
+            p1,
+            p2
+        )
+
+
+        segments.append(
+            {
+                "p1": p1,
+                "p2": p2,
+                "dx": dx,
+                "dy": dy,
+                "map_len_sq": map_len_sq,
+                "real_len": real_len,
+                "start_m": accumulated
+            }
+        )
+
+
+        accumulated += real_len
+
+
+    return segments, accumulated
+
+
+# ============================================================
+# ПРОЕКЦИЯ СТАРОЙ ТОЧКИ НА КАНДИДАТА
+#
+# Возвращает:
+# - расстояние вдоль кандидата;
+# - реальное поперечное расстояние;
+# - координату проекции.
+# ============================================================
+
+def project_point_to_path(
+    point,
+    segments
+):
+
+    best = None
+    best_map_dist_sq = None
+
+
+    for segment in segments:
+
+        p1 = segment["p1"]
+
+        dx = segment["dx"]
+        dy = segment["dy"]
+
+
+        vx = point.x() - p1.x()
+        vy = point.y() - p1.y()
+
+
+        t = (
+            vx * dx
+            + vy * dy
+        ) / segment[
+            "map_len_sq"
+        ]
+
+
+        t = max(
+            0.0,
+            min(1.0, t)
+        )
+
+
+        px = (
+            p1.x()
+            + t * dx
+        )
+
+        py = (
+            p1.y()
+            + t * dy
+        )
+
+
+        ddx = point.x() - px
+        ddy = point.y() - py
+
+        map_dist_sq = (
+            ddx * ddx
+            + ddy * ddy
+        )
+
+
+        if (
+            best_map_dist_sq is None
+            or
+            map_dist_sq
+            < best_map_dist_sq
+        ):
+
+            projection = QgsPointXY(
+                px,
+                py
+            )
+
+            chainage = (
+                segment["start_m"]
+                + t
+                * segment["real_len"]
+            )
+
+            perpendicular = real_distance(
+                point,
+                projection
+            )
+
+
+            best = {
+                "chainage": chainage,
+                "distance": perpendicular,
+                "projection": projection
+            }
+
+            best_map_dist_sq = (
+                map_dist_sq
+            )
+
+
+    return best
+
+
+# ============================================================
+# ОЦЕНКА КАНДИДАТА
+# ============================================================
+
+def evaluate_candidate(
+    path_coords
+):
+
+    segments, path_length = (
+        prepare_path_segments(
+            path_coords
+        )
+    )
+
+
+    if not segments:
+        return None
+
+
+    observations = []
+
+
+    for rp in route_points:
+
+        projection = project_point_to_path(
+            rp["point"],
+            segments
+        )
+
+
+        if projection is None:
+            continue
+
+
+        observations.append(
+            {
+                "km": rp["km"],
+                "name": rp["name"],
+                "chainage": projection[
+                    "chainage"
+                ],
+                "distance": projection[
+                    "distance"
+                ]
+            }
+        )
+
+
+    if not observations:
+        return None
+
+
+    # ====================================================
+    # ВАРИАНТ A
+    #
+    # Расстояние вдоль новой линии растёт
+    # вместе с километровой отметкой.
+    #
+    # s = km + OFFSET
+    # ====================================================
+
+    forward_offsets = [
+        obs["chainage"]
+        - obs["km"] * 1000.0
+        for obs in observations
+    ]
+
+
+    forward_offset = median(
+        forward_offsets
+    )
+
+
+    forward_residuals = [
+        abs(
+            obs["chainage"]
+            -
+            (
+                obs["km"] * 1000.0
+                + forward_offset
             )
         )
-    except:
-        pass
+        for obs in observations
+    ]
 
-    if data["norm"]:
-        named_count += 1
+
+    forward_median_residual = median(
+        forward_residuals
+    )
+
+
+    # ====================================================
+    # ВАРИАНТ B
+    #
+    # Линия оцифрована в обратную сторону:
+    #
+    # s = OFFSET - km
+    # ====================================================
+
+    reverse_offsets = [
+        obs["chainage"]
+        + obs["km"] * 1000.0
+        for obs in observations
+    ]
+
+
+    reverse_offset = median(
+        reverse_offsets
+    )
+
+
+    reverse_residuals = [
+        abs(
+            obs["chainage"]
+            -
+            (
+                reverse_offset
+                - obs["km"] * 1000.0
+            )
+        )
+        for obs in observations
+    ]
+
+
+    reverse_median_residual = median(
+        reverse_residuals
+    )
+
+
+    if (
+        forward_median_residual
+        <=
+        reverse_median_residual
+    ):
+
+        direction = "прямое"
+
+        offset = forward_offset
+
+        residuals = forward_residuals
+
     else:
-        null_count += 1
+
+        direction = "обратное"
+
+        offset = reverse_offset
+
+        residuals = reverse_residuals
 
 
-# =========================================================
-# ОТЧЁТ
-# =========================================================
+    median_residual = median(
+        residuals
+    )
+
+
+    median_distance = median(
+        [
+            obs["distance"]
+            for obs in observations
+        ]
+    )
+
+
+    max_residual = max(
+        residuals
+    )
+
+
+    # Диапазон километровых отметок
+    if len(observations) >= 2:
+
+        km_span = (
+            max(
+                obs["km"]
+                for obs in observations
+            )
+            -
+            min(
+                obs["km"]
+                for obs in observations
+            )
+        ) * 1000.0
+
+    else:
+
+        km_span = 0.0
+
+
+    # Если кандидат физически короче диапазона
+    # наших точек, добавляем большой штраф.
+    shortfall = max(
+        0.0,
+        km_span - path_length
+    )
+
+
+    # ----------------------------------------------------
+    # ОЦЕНКА
+    #
+    # Главный критерий:
+    # сохранение километровых расстояний.
+    #
+    # Поперечная удалённость имеет меньший вес,
+    # потому что новая трасса может быть
+    # в 20-30 км от старой.
+    # ----------------------------------------------------
+
+    if len(observations) >= 2:
+
+        score = (
+            median_residual
+            +
+            0.10 * median_distance
+            +
+            5.0 * shortfall
+        )
+
+    else:
+
+        # С одной точкой километраж ничего
+        # доказать не может.
+        score = median_distance
+
+
+    # Добавляем residual в observations
+    for obs, residual in zip(
+        observations,
+        residuals
+    ):
+
+        obs["residual"] = residual
+
+
+    return {
+        "score": score,
+        "direction": direction,
+        "offset": offset,
+        "median_residual": median_residual,
+        "max_residual": max_residual,
+        "median_distance": median_distance,
+        "length": path_length,
+        "observations": observations
+    }
+
+
+# ============================================================
+# СТРОИМ КАНДИДАТЫ
+# ============================================================
+
+candidates = []
+
+
+for component_number, component in enumerate(
+    components,
+    start=1
+):
+
+    path = component_main_path(
+        component
+    )
+
+
+    if path is None:
+        continue
+
+
+    path_nodes, path_edges = path
+
+
+    if not path_edges:
+        continue
+
+
+    coords = build_path_coords(
+        path_nodes,
+        path_edges
+    )
+
+
+    if len(coords) < 2:
+        continue
+
+
+    evaluation = evaluate_candidate(
+        coords
+    )
+
+
+    if evaluation is None:
+        continue
+
+
+    source_fids = sorted(
+        set(
+            edges[edge_id]["fid"]
+            for edge_id in path_edges
+        )
+    )
+
+
+    candidates.append(
+        {
+            "component": component_number,
+            "path_edges": path_edges,
+            "path_nodes": path_nodes,
+            "source_fids": source_fids,
+            "coords": coords,
+            **evaluation
+        }
+    )
+
+
+if not candidates:
+
+    raise Exception(
+        "Не удалось построить ни одного "
+        "кандидата из безымянных линий."
+    )
+
+
+# ============================================================
+# СОРТИРОВКА
+# ============================================================
+
+candidates.sort(
+    key=lambda item: item[
+        "score"
+    ]
+)
+
 
 print("")
-print("=" * 90)
-print("РЕЗУЛЬТАТ")
-print("=" * 90)
+print("=" * 100)
+print("ЛУЧШИЕ КАНДИДАТЫ")
+print("=" * 100)
 
-print(
-    f"В цепочку вошло объектов: "
-    f"{len(visited)}"
+
+for number, candidate in enumerate(
+    candidates[
+        :TOP_CANDIDATES
+    ],
+    start=1
+):
+
+    print("")
+    print(
+        f"{number}. Компонент "
+        f"{candidate['component']}"
+    )
+
+    print(
+        f"   длина основной цепочки: "
+        f"{candidate['length'] / 1000:.2f} км"
+    )
+
+    print(
+        f"   направление: "
+        f"{candidate['direction']}"
+    )
+
+    print(
+        f"   медианное отклонение километража: "
+        f"{candidate['median_residual'] / 1000:.3f} км"
+    )
+
+    print(
+        f"   максимальное отклонение километража: "
+        f"{candidate['max_residual'] / 1000:.3f} км"
+    )
+
+    print(
+        f"   медианное расстояние "
+        f"от старых точек до трассы: "
+        f"{candidate['median_distance'] / 1000:.2f} км"
+    )
+
+    print(
+        f"   score: "
+        f"{candidate['score'] / 1000:.3f}"
+    )
+
+    print(
+        f"   объектов pipeline_1: "
+        f"{len(candidate['source_fids'])}"
+    )
+
+
+# ============================================================
+# ЛУЧШИЙ КАНДИДАТ
+# ============================================================
+
+best = candidates[0]
+
+
+pipes.removeSelection()
+
+pipes.selectByIds(
+    best["source_fids"]
 )
 
-print(
-    f"Именованных:              "
-    f"{named_count}"
-)
-
-print(
-    f"Без имени / NULL:          "
-    f"{null_count}"
-)
-
-print(
-    f"Суммарная длина:           "
-    f"{total_length / 1000:.3f} км"
-)
+pipes.triggerRepaint()
 
 
 print("")
-print("FID объектов цепочки:")
+print("=" * 100)
+print("ЛУЧШИЙ КАНДИДАТ")
+print("=" * 100)
+
+print(
+    f"Компонент: "
+    f"{best['component']}"
+)
+
+print(
+    f"Длина: "
+    f"{best['length'] / 1000:.3f} км"
+)
+
+print(
+    f"Направление: "
+    f"{best['direction']}"
+)
+
+print(
+    f"Медианное расхождение километража: "
+    f"{best['median_residual']:.1f} м"
+)
+
+print(
+    f"Средняя логика сдвига трассы: "
+    f"OFFSET = "
+    f"{best['offset'] / 1000:.3f} км"
+)
+
+print("")
+print("ПРОВЕРКА ПО ТОЧКАМ:")
+print("-" * 100)
+
+
+for obs in best[
+    "observations"
+]:
+
+    print(
+        f"{obs['km']:10.3f} км | "
+        f"до новой трассы "
+        f"{obs['distance'] / 1000:8.2f} км | "
+        f"позиция вдоль кандидата "
+        f"{obs['chainage'] / 1000:9.3f} км | "
+        f"ошибка шага "
+        f"{obs['residual']:7.1f} м"
+    )
+
+
+print("")
+print(
+    f"FID выделенных объектов pipeline_1:"
+)
 
 print(
     ", ".join(
         str(fid)
-        for fid in sorted(visited)
+        for fid in best[
+            "source_fids"
+        ]
     )
 )
-
-
-# =========================================================
-# РАЗВИЛКИ
-# =========================================================
-
-if not branches:
-
-    print("")
-    print(
-        "РАЗВИЛОК НЕ ОБНАРУЖЕНО."
-    )
-
-    print(
-        "Вся найденная цепочка "
-        "прошла однозначно."
-    )
-
-else:
-
-    print("")
-    print("=" * 90)
-    print(
-        f"ОБНАРУЖЕНО РАЗВИЛОК: "
-        f"{len(branches)}"
-    )
-    print("=" * 90)
-
-
-    for number, branch in enumerate(
-        branches,
-        start=1
-    ):
-
-        node = branch["node"]
-
-        print("")
-        print(
-            f"РАЗВИЛКА №{number}"
-        )
-
-        print(
-            f"Пришли из FID: "
-            f"{branch['from_fid']}"
-        )
-
-        print(
-            f"Координаты узла: "
-            f"{node.x():.2f}, "
-            f"{node.y():.2f}"
-        )
-
-        print(
-            "Возможные продолжения:"
-        )
-
-
-        for candidate in branch[
-            "candidates"
-        ]:
-
-            candidate_name = (
-                candidate["name"]
-                if candidate["name"]
-                else "<NULL>"
-            )
-
-            if candidate[
-                "angle"
-            ] is None:
-
-                angle_text = "не вычислен"
-
-            else:
-
-                angle_text = (
-                    f"{candidate['angle']:.1f}°"
-                )
-
-
-            print(
-                f"    FID "
-                f"{candidate['fid']} | "
-                f"name={candidate_name} | "
-                f"поворот={angle_text} | "
-                f"стык="
-                f"{candidate['distance']:.2f}"
-            )
-
-
-        print(
-            "  -> Скрипт здесь "
-            "НЕ выбирал ветку."
-        )
 
 
 print("")
-print("=" * 90)
+print("=" * 100)
 
 print(
-    "pipeline_1: однозначная часть "
-    "маршрута выделена на карте."
+    "ТОЧКИ НЕ ПЕРЕМЕЩАЛИСЬ."
 )
 
 print(
-    "Геометрия точек НЕ изменялась."
+    "На карте выделена предполагаемая "
+    "безымянная трасса."
 )
 
-print("=" * 90)
+print("=" * 100)
