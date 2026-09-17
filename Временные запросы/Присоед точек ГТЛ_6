@@ -21,22 +21,30 @@ PIPE_LAYER_NAME = "pipeline_1"
 POINT_NAME_FIELD = "Name"
 PIPE_NAME_FIELD = "name"
 
-# Рабочий радиус поиска локальной линии
+# Радиус первичного поиска линии.
+# Реальные метры.
 SEARCH_RADIUS_M = 80000
 
-# Соседние точки маршрута с каждой стороны
+# Сколько соседних точек того же маршрута
+# используем слева и справа от каждой обрабатываемой точки.
 CONTROL_POINTS_EACH_SIDE = 3
 
-# Соединение концов pipeline_1
+# Допуск соединения КОНЦОВ объектов pipeline_1.
+#
+# Это координатные единицы слоя EPSG:3857.
+# Для настоящего километража этот параметр НЕ используется.
 CONNECT_TOLERANCE = 5.0
 
-# Желательно иметь хотя бы две соседние точки
-# для калибровки
-MIN_CALIBRATION_POINTS = 2
+# Только предупреждение о качестве.
+# Точку из-за этого автоматически не блокируем.
+CALIBRATION_WARNING_M = 1500
+
+# Только предупреждение о большом перемещении.
+MOVE_WARNING_M = 30000
 
 
 # ============================================================
-# НАЗВАНИЯ
+# РАЗБОР И НОРМАЛИЗАЦИЯ НАЗВАНИЙ
 # ============================================================
 
 def normalize_name(value):
@@ -55,6 +63,13 @@ def normalize_name(value):
 
 
 def parse_point_name(value):
+    """
+    Поддерживает, например:
+
+        23 км Шебелинка-Острогожск
+        37,5 км КС Нюксеница-Архангельск
+        ТСГ 31 км УКПГ-15-КС Ямбургская
+    """
 
     if value is None:
         return None, None
@@ -71,18 +86,38 @@ def parse_point_name(value):
         return None, None
 
     try:
-        km = float(
+
+        km_value = float(
             match.group(1).replace(",", ".")
         )
+
     except ValueError:
+
         return None, None
 
-    route = match.group(2).strip()
+    route_name = match.group(2).strip()
 
-    return km, route
+    return km_value, route_name
 
+
+# ============================================================
+# ПРИОРИТЕТ НАЗВАНИЯ pipeline_1
+# ============================================================
 
 def name_priority(route_norm, pipe_norm):
+    """
+    None = название не соответствует.
+
+    Меньшее число = лучше.
+
+    Например:
+
+    Ухта-Торжок        -> 0
+    Ухта-Торжок 1      -> 1
+    Ухта-Торжок 2      -> 20
+    Ухта-Торжок 3      -> 30
+    Ухта-Торжок 2 Ямал -> 120
+    """
 
     if not pipe_norm:
         return None
@@ -93,7 +128,9 @@ def name_priority(route_norm, pipe_norm):
     if not pipe_norm.startswith(route_norm):
         return None
 
-    suffix = pipe_norm[len(route_norm):]
+    suffix = pipe_norm[
+        len(route_norm):
+    ]
 
     if suffix == "":
         return 0
@@ -109,6 +146,7 @@ def name_priority(route_norm, pipe_norm):
             return 1
 
         return number * 10
+
 
     match = re.match(
         r"^(\d+)(.*)$",
@@ -130,11 +168,12 @@ def name_priority(route_norm, pipe_norm):
 
         return priority
 
+
     return 500
 
 
 # ============================================================
-# СЛОИ
+# ПОЛУЧАЕМ СЛОИ
 # ============================================================
 
 point_layers = QgsProject.instance().mapLayersByName(
@@ -145,58 +184,56 @@ pipe_layers = QgsProject.instance().mapLayersByName(
     PIPE_LAYER_NAME
 )
 
+
 if not point_layers:
     raise Exception(
         f"Не найден слой '{POINT_LAYER_NAME}'"
     )
+
 
 if not pipe_layers:
     raise Exception(
         f"Не найден слой '{PIPE_LAYER_NAME}'"
     )
 
+
 points = point_layers[0]
 pipes = pipe_layers[0]
 
 
 # ============================================================
-# ВЫБРАННАЯ ТОЧКА
+# ВЫДЕЛЕННЫЕ ТОЧКИ
 # ============================================================
 
-selected = points.selectedFeatures()
-
-if len(selected) != 1:
-    raise Exception(
-        "Выдели ровно ОДНУ точку "
-        "в слое 'Копия точек'."
-    )
-
-selected_feature = selected[0]
-
-if not selected_feature.hasGeometry():
-    raise Exception(
-        "У выбранной точки нет геометрии."
-    )
-
-selected_km, selected_route = parse_point_name(
-    selected_feature[
-        POINT_NAME_FIELD
-    ]
+selected_ids = list(
+    points.selectedFeatureIds()
 )
 
-if selected_km is None:
+
+if not selected_ids:
+
     raise Exception(
-        "Не удалось определить километраж "
-        "выбранной точки."
+        f"В слое '{POINT_LAYER_NAME}' "
+        f"нет выделенных объектов."
     )
 
-route_norm = normalize_name(
-    selected_route
+
+print("")
+print("=" * 110)
+print("ПОДГОТОВКА")
+print("=" * 110)
+
+print(
+    f"Выделено точек: "
+    f"{len(selected_ids)}"
 )
 
 
 # ============================================================
 # РЕАЛЬНЫЕ РАССТОЯНИЯ
+#
+# Слои остаются в EPSG:3857,
+# но километры считаем на WGS84.
 # ============================================================
 
 da = QgsDistanceArea()
@@ -206,7 +243,9 @@ da.setSourceCrs(
     QgsProject.instance().transformContext()
 )
 
-da.setEllipsoid("WGS84")
+da.setEllipsoid(
+    "WGS84"
+)
 
 
 def real_distance(p1, p2):
@@ -234,7 +273,80 @@ def coords_real_length(coords):
 
 
 # ============================================================
-# pipeline_1 БЕЗ ПРЕДВАРИТЕЛЬНОЙ ФИЛЬТРАЦИИ
+# СОХРАНЯЕМ ИСХОДНОЕ СОСТОЯНИЕ ВСЕХ ТОЧЕК
+#
+# ВАЖНО:
+# последующие перемещения не будут влиять
+# на расчёт следующих выбранных объектов.
+# ============================================================
+
+point_snapshot = {}
+route_index = {}
+
+
+for feature in points.getFeatures():
+
+    if not feature.hasGeometry():
+        continue
+
+    raw_name = feature[
+        POINT_NAME_FIELD
+    ]
+
+    km_value, route_name = parse_point_name(
+        raw_name
+    )
+
+    if km_value is None:
+        continue
+
+    route_norm = normalize_name(
+        route_name
+    )
+
+    point_xy = QgsPointXY(
+        feature.geometry().asPoint()
+    )
+
+
+    item = {
+        "fid": feature.id(),
+        "name": str(raw_name),
+        "km": km_value,
+        "route": route_name,
+        "route_norm": route_norm,
+        "point": point_xy
+    }
+
+
+    point_snapshot[
+        feature.id()
+    ] = item
+
+
+    route_index.setdefault(
+        route_norm,
+        []
+    ).append(
+        item
+    )
+
+
+# Сортируем точки каждого маршрута по километражу
+for route_norm in route_index:
+
+    route_index[
+        route_norm
+    ].sort(
+        key=lambda x:
+        x["km"]
+    )
+
+
+# ============================================================
+# ЧИТАЕМ pipeline_1
+#
+# НИЧЕГО заранее не отбрасываем по name.
 # ============================================================
 
 pipe_features = []
@@ -254,12 +366,17 @@ for feature in pipes.getFeatures():
         PIPE_NAME_FIELD
     ]
 
+
     if raw_name is None:
+
         pipe_name = ""
+
     else:
+
         pipe_name = str(
             raw_name
         ).strip()
+
 
     pipe_features.append(
         {
@@ -273,54 +390,108 @@ for feature in pipes.getFeatures():
     )
 
 
+print(
+    f"Объектов pipeline_1: "
+    f"{len(pipe_features)}"
+)
+
+
 # ============================================================
-# РАБОЧАЯ ЛОГИКА ВЫБОРА ЛОКАЛЬНОЙ ЛИНИИ
+# ВЫБОР ЛОКАЛЬНОЙ ЛИНИИ
+#
+# РАБОЧАЯ ЛОГИКА:
+#
+# 1. сначала близость;
+# 2. внутри радиуса смотрим name;
+# 3. если есть совпадающий name —
+#    выбираем его;
+# 4. если совпадения нет —
+#    выбираем просто ближайший объект.
+#
+# NULL НЕ имеет преимущества перед другим именем.
 # ============================================================
 
+local_anchor_cache = {}
+
+
 def choose_local_feature(
-    point_xy,
-    route_norm
+    point_item
 ):
+
+    cache_key = (
+        point_item["fid"],
+        point_item["route_norm"]
+    )
+
+
+    if cache_key in local_anchor_cache:
+
+        return local_anchor_cache[
+            cache_key
+        ]
+
+
+    point_xy = point_item[
+        "point"
+    ]
+
+    route_norm = point_item[
+        "route_norm"
+    ]
+
 
     point_geom = QgsGeometry.fromPointXY(
         point_xy
     )
 
+
     candidates = []
 
 
-    for item in pipe_features:
+    for pipe in pipe_features:
 
         nearest_geom = (
-            item["geom"]
-            .nearestPoint(point_geom)
+            pipe["geom"]
+            .nearestPoint(
+                point_geom
+            )
         )
+
 
         if nearest_geom.isEmpty():
             continue
 
+
         nearest_xy = QgsPointXY(
             nearest_geom.asPoint()
         )
+
 
         distance_m = real_distance(
             point_xy,
             nearest_xy
         )
 
-        # Первый фильтр — близость
+
+        # --------------------------------------------
+        # ПЕРВЫЙ ФИЛЬТР:
+        # географическая близость
+        # --------------------------------------------
+
         if distance_m > SEARCH_RADIUS_M:
             continue
 
+
         priority = name_priority(
             route_norm,
-            item["norm"]
+            pipe["norm"]
         )
+
 
         candidates.append(
             {
-                "fid": item["fid"],
-                "name": item["name"],
+                "fid": pipe["fid"],
+                "name": pipe["name"],
                 "distance": distance_m,
                 "priority": priority
             }
@@ -328,15 +499,25 @@ def choose_local_feature(
 
 
     if not candidates:
+
+        local_anchor_cache[
+            cache_key
+        ] = None
+
         return None
 
 
     candidates.sort(
-        key=lambda x: x["distance"]
+        key=lambda x:
+        x["distance"]
     )
 
 
-    # Второй этап — имя
+    # --------------------------------------------
+    # ВТОРОЙ ЭТАП:
+    # название
+    # --------------------------------------------
+
     matches = [
         item
         for item in candidates
@@ -351,23 +532,29 @@ def choose_local_feature(
             for item in matches
         )
 
-        matches = [
+
+        best_matches = [
             item
             for item in matches
             if item["priority"]
             == best_priority
         ]
 
-        matches.sort(
+
+        best_matches.sort(
             key=lambda x:
             x["distance"]
         )
 
+
         chosen = dict(
-            matches[0]
+            best_matches[0]
         )
 
-        chosen["reason"] = "MATCH"
+        chosen[
+            "reason"
+        ] = "MATCH"
+
 
     else:
 
@@ -375,149 +562,24 @@ def choose_local_feature(
             candidates[0]
         )
 
-        chosen["reason"] = "NEAREST"
+        chosen[
+            "reason"
+        ] = "NEAREST"
+
+
+    local_anchor_cache[
+        cache_key
+    ] = chosen
 
 
     return chosen
 
 
 # ============================================================
-# ТОЧКИ ЭТОГО ЖЕ МАРШРУТА
-# ============================================================
-
-route_points = []
-
-
-for feature in points.getFeatures():
-
-    if not feature.hasGeometry():
-        continue
-
-    km, route = parse_point_name(
-        feature[
-            POINT_NAME_FIELD
-        ]
-    )
-
-    if km is None:
-        continue
-
-    if normalize_name(route) != route_norm:
-        continue
-
-    route_points.append(
-        {
-            "fid": feature.id(),
-            "km": km,
-            "name": str(
-                feature[
-                    POINT_NAME_FIELD
-                ]
-            ),
-            "point": QgsPointXY(
-                feature.geometry().asPoint()
-            )
-        }
-    )
-
-
-route_points.sort(
-    key=lambda x: x["km"]
-)
-
-
-selected_index = None
-
-for i, item in enumerate(
-    route_points
-):
-
-    if item["fid"] == selected_feature.id():
-
-        selected_index = i
-        break
-
-
-if selected_index is None:
-    raise Exception(
-        "Выбранная точка не найдена "
-        "среди точек маршрута."
-    )
-
-
-start_i = max(
-    0,
-    selected_index
-    - CONTROL_POINTS_EACH_SIDE
-)
-
-end_i = min(
-    len(route_points),
-    selected_index
-    + CONTROL_POINTS_EACH_SIDE
-    + 1
-)
-
-
-control_points = route_points[
-    start_i:end_i
-]
-
-
-# ============================================================
-# ЛОКАЛЬНЫЕ ЯКОРЯ
-# ============================================================
-
-print("")
-print("=" * 100)
-print("ЛОКАЛЬНЫЕ ЯКОРЯ")
-print("=" * 100)
-
-print(
-    f"Выбранная точка: "
-    f"{selected_feature[POINT_NAME_FIELD]}"
-)
-
-print("")
-
-
-for cp in control_points:
-
-    cp["anchor"] = choose_local_feature(
-        cp["point"],
-        route_norm
-    )
-
-    anchor = cp["anchor"]
-
-    if anchor is None:
-
-        print(
-            f"{cp['km']:10.3f} км | "
-            f"не найдено"
-        )
-
-        continue
-
-    display_name = (
-        anchor["name"]
-        if anchor["name"]
-        else "<NULL>"
-    )
-
-    print(
-        f"{cp['km']:10.3f} км | "
-        f"{anchor['distance'] / 1000:8.3f} км | "
-        f"{anchor['reason']:7s} | "
-        f"FID={anchor['fid']} | "
-        f"{display_name}"
-    )
-
-
-# ============================================================
-# ГРАФ ВСЕГО pipeline_1
+# СТРОИМ ГРАФ ВСЕГО pipeline_1
 #
-# Имя здесь уже НЕ влияет.
+# Здесь name больше НЕ влияет.
+# Используется только физическая связанность концов.
 # ============================================================
 
 nodes = {}
@@ -530,7 +592,10 @@ adjacency = {}
 next_node_id = 0
 
 
-def map_distance(p1, p2):
+def map_distance(
+    p1,
+    p2
+):
 
     return math.hypot(
         p1.x() - p2.x(),
@@ -556,24 +621,29 @@ def grid_key(point):
     )
 
 
-def get_or_create_node(point):
+def get_or_create_node(
+    point
+):
 
     global next_node_id
 
-    key = grid_key(point)
+    key = grid_key(
+        point
+    )
 
 
     for dx in (-1, 0, 1):
 
         for dy in (-1, 0, 1):
 
-            check = (
+            check_key = (
                 key[0] + dx,
                 key[1] + dy
             )
 
+
             for node_id in node_grid.get(
-                check,
+                check_key,
                 []
             ):
 
@@ -591,9 +661,13 @@ def get_or_create_node(point):
     node_id = next_node_id
     next_node_id += 1
 
-    nodes[node_id] = QgsPointXY(
+
+    nodes[
+        node_id
+    ] = QgsPointXY(
         point
     )
+
 
     node_grid.setdefault(
         key,
@@ -602,22 +676,29 @@ def get_or_create_node(point):
         node_id
     )
 
+
     return node_id
 
 
-def add_adj(node, edge_id):
+def add_adj(
+    node_id,
+    edge_id
+):
 
     adjacency.setdefault(
-        node,
+        node_id,
         []
     ).append(
         edge_id
     )
 
 
-for item in pipe_features:
+for pipe in pipe_features:
 
-    geom = item["geom"]
+    geom = pipe[
+        "geom"
+    ]
+
 
     if geom.isMultipart():
 
@@ -637,10 +718,12 @@ for item in pipe_features:
         if len(part) < 2:
             continue
 
+
         coords = [
             QgsPointXY(p)
             for p in part
         ]
+
 
         n1 = get_or_create_node(
             coords[0]
@@ -650,10 +733,14 @@ for item in pipe_features:
             coords[-1]
         )
 
-        edge_id = len(edges)
+
+        edge_id = len(
+            edges
+        )
+
 
         edge = {
-            "fid": item["fid"],
+            "fid": pipe["fid"],
             "part": part_number,
             "n1": n1,
             "n2": n2,
@@ -663,14 +750,19 @@ for item in pipe_features:
             )
         }
 
-        edges.append(edge)
+
+        edges.append(
+            edge
+        )
+
 
         edges_by_fid.setdefault(
-            item["fid"],
+            pipe["fid"],
             []
         ).append(
             edge_id
         )
+
 
         add_adj(
             n1,
@@ -683,8 +775,19 @@ for item in pipe_features:
         )
 
 
+print(
+    f"Рёбер графа: "
+    f"{len(edges)}"
+)
+
+print(
+    f"Узлов графа: "
+    f"{len(nodes)}"
+)
+
+
 # ============================================================
-# ПРОЕКЦИЯ ТОЧКИ НА РЕБРО
+# ПРОЕКЦИЯ ТОЧКИ НА ОДНО РЕБРО
 # ============================================================
 
 def project_point_to_edge(
@@ -692,7 +795,9 @@ def project_point_to_edge(
     edge
 ):
 
-    coords = edge["coords"]
+    coords = edge[
+        "coords"
+    ]
 
     accumulated = 0.0
 
@@ -707,40 +812,78 @@ def project_point_to_edge(
         p1 = coords[i]
         p2 = coords[i + 1]
 
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
+
+        dx = (
+            p2.x()
+            - p1.x()
+        )
+
+        dy = (
+            p2.y()
+            - p1.y()
+        )
+
 
         map_sq = (
             dx * dx
             + dy * dy
         )
 
+
         if map_sq == 0:
             continue
 
-        vx = point.x() - p1.x()
-        vy = point.y() - p1.y()
+
+        vx = (
+            point.x()
+            - p1.x()
+        )
+
+        vy = (
+            point.y()
+            - p1.y()
+        )
+
 
         t = (
             vx * dx
             + vy * dy
         ) / map_sq
 
+
         t = max(
             0.0,
             min(1.0, t)
         )
 
-        px = p1.x() + t * dx
-        py = p1.y() + t * dy
 
-        ddx = point.x() - px
-        ddy = point.y() - py
+        px = (
+            p1.x()
+            + t * dx
+        )
+
+        py = (
+            p1.y()
+            + t * dy
+        )
+
+
+        ddx = (
+            point.x()
+            - px
+        )
+
+        ddy = (
+            point.y()
+            - py
+        )
+
 
         map_dist_sq = (
             ddx * ddx
             + ddy * ddy
         )
+
 
         seg_real = real_distance(
             p1,
@@ -751,16 +894,18 @@ def project_point_to_edge(
         if (
             best_map_sq is None
             or
-            map_dist_sq < best_map_sq
+            map_dist_sq
+            < best_map_sq
         ):
 
-            projection = QgsPointXY(
+            projected = QgsPointXY(
                 px,
                 py
             )
 
+
             best = {
-                "point": projection,
+                "point": projected,
                 "seg_index": i,
                 "t": t,
                 "chainage": (
@@ -769,9 +914,10 @@ def project_point_to_edge(
                 ),
                 "distance": real_distance(
                     point,
-                    projection
+                    projected
                 )
             }
+
 
             best_map_sq = (
                 map_dist_sq
@@ -785,11 +931,11 @@ def project_point_to_edge(
 
 
 # ============================================================
-# ЯКОРЬ -> КОНКРЕТНОЕ РЕБРО ГРАФА
+# ЛОКАЛЬНЫЙ FID -> КОНКРЕТНОЕ РЕБРО ГРАФА
 # ============================================================
 
 def anchor_to_graph(
-    point,
+    point_item,
     anchor
 ):
 
@@ -803,18 +949,24 @@ def anchor_to_graph(
     )
 
 
+    if not edge_ids:
+        return None
+
+
     best = None
 
 
     for edge_id in edge_ids:
 
         projection = project_point_to_edge(
-            point,
+            point_item["point"],
             edges[edge_id]
         )
 
+
         if projection is None:
             continue
+
 
         if (
             best is None
@@ -833,72 +985,34 @@ def anchor_to_graph(
     return best
 
 
-for cp in control_points:
-
-    cp["graph_anchor"] = anchor_to_graph(
-        cp["point"],
-        cp["anchor"]
-    )
-
-
-# ============================================================
-# ОСТАВЛЯЕМ ТОЛЬКО ТОЧКИ С ЯКОРЯМИ
-# ============================================================
-
-usable_controls = [
-    cp
-    for cp in control_points
-    if cp["graph_anchor"] is not None
-]
-
-
-if len(usable_controls) < 2:
-
-    raise Exception(
-        "Недостаточно контрольных точек "
-        "с найденными линиями."
-    )
-
-
-# Самая маленькая и самая большая отметка
-path_start_cp = min(
-    usable_controls,
-    key=lambda x: x["km"]
-)
-
-path_end_cp = max(
-    usable_controls,
-    key=lambda x: x["km"]
-)
-
-
-if (
-    path_start_cp["fid"]
-    ==
-    path_end_cp["fid"]
-):
-
-    raise Exception(
-        "Не удалось получить диапазон "
-        "контрольных точек."
-    )
-
-
-expected_span = (
-    path_end_cp["km"]
-    -
-    path_start_cp["km"]
-) * 1000.0
-
-
 # ============================================================
 # DIJKSTRA
 # ============================================================
+
+dijkstra_cache = {}
+
 
 def dijkstra(
     start_node,
     forbidden_edges
 ):
+
+    cache_key = (
+        start_node,
+        tuple(
+            sorted(
+                forbidden_edges
+            )
+        )
+    )
+
+
+    if cache_key in dijkstra_cache:
+
+        return dijkstra_cache[
+            cache_key
+        ]
+
 
     distances = {
         start_node: 0.0
@@ -906,8 +1020,12 @@ def dijkstra(
 
     previous = {}
 
+
     heap = [
-        (0.0, start_node)
+        (
+            0.0,
+            start_node
+        )
     ]
 
 
@@ -935,14 +1053,20 @@ def dijkstra(
             if edge_id in forbidden_edges:
                 continue
 
+
             edge = edges[
                 edge_id
             ]
 
+
             if edge["n1"] == node:
+
                 other = edge["n2"]
+
             else:
+
                 other = edge["n1"]
+
 
             new_distance = (
                 current_distance
@@ -954,17 +1078,22 @@ def dijkstra(
                 other not in distances
                 or
                 new_distance
-                < distances[other]
+                <
+                distances[other]
             ):
 
-                distances[other] = (
-                    new_distance
-                )
+                distances[
+                    other
+                ] = new_distance
 
-                previous[other] = (
+
+                previous[
+                    other
+                ] = (
                     node,
                     edge_id
                 )
+
 
                 heapq.heappush(
                     heap,
@@ -975,8 +1104,23 @@ def dijkstra(
                 )
 
 
-    return distances, previous
+    result = (
+        distances,
+        previous
+    )
 
+
+    dijkstra_cache[
+        cache_key
+    ] = result
+
+
+    return result
+
+
+# ============================================================
+# ВОССТАНОВЛЕНИЕ СЕТЕВОГО ПУТИ
+# ============================================================
 
 def reconstruct(
     start_node,
@@ -1004,17 +1148,26 @@ def reconstruct(
     while current != start_node:
 
         if current not in previous:
+
             return None
 
+
         previous_node, edge_id = (
-            previous[current]
+            previous[
+                current
+            ]
         )
+
 
         edges_rev.append(
             edge_id
         )
 
-        current = previous_node
+
+        current = (
+            previous_node
+        )
+
 
         nodes_rev.append(
             current
@@ -1023,16 +1176,20 @@ def reconstruct(
 
     return (
         list(
-            reversed(nodes_rev)
+            reversed(
+                nodes_rev
+            )
         ),
         list(
-            reversed(edges_rev)
+            reversed(
+                edges_rev
+            )
         )
     )
 
 
 # ============================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СБОРКИ ПУТИ
+# ОРИЕНТАЦИЯ ГЕОМЕТРИИ РЕБРА
 # ============================================================
 
 def oriented_edge_coords(
@@ -1051,6 +1208,7 @@ def oriented_edge_coords(
             edge["coords"]
         )
 
+
     return list(
         reversed(
             edge["coords"]
@@ -1058,19 +1216,29 @@ def oriented_edge_coords(
     )
 
 
+# ============================================================
+# ПРОЕКЦИЯ -> КОНЕЦ РЕБРА
+# ============================================================
+
 def projection_to_node_coords(
     edge,
     projection,
     node
 ):
 
-    coords = edge["coords"]
+    coords = edge[
+        "coords"
+    ]
+
 
     i = projection[
         "seg_index"
     ]
 
-    pp = projection["point"]
+
+    pp = projection[
+        "point"
+    ]
 
 
     if node == edge["n1"]:
@@ -1079,11 +1247,15 @@ def projection_to_node_coords(
             pp
         ]
 
+
         result.extend(
             reversed(
-                coords[:i + 1]
+                coords[
+                    :i + 1
+                ]
             )
         )
+
 
         return result
 
@@ -1092,11 +1264,13 @@ def projection_to_node_coords(
         pp
     ]
 
+
     result.extend(
         coords[
             i + 1:
         ]
     )
+
 
     return result
 
@@ -1113,10 +1287,16 @@ def node_to_projection_coords(
         node
     )
 
+
     result.reverse()
+
 
     return result
 
+
+# ============================================================
+# ДОБАВЛЕНИЕ КООРДИНАТ В ЦЕПОЧКУ
+# ============================================================
 
 def append_coords(
     result,
@@ -1126,6 +1306,7 @@ def append_coords(
     if not addition:
         return
 
+
     if not result:
 
         result.extend(
@@ -1134,16 +1315,24 @@ def append_coords(
 
         return
 
-    first = addition[0]
+
+    first = addition[
+        0
+    ]
+
 
     if (
-        result[-1].x() == first.x()
+        result[-1].x()
+        == first.x()
         and
-        result[-1].y() == first.y()
+        result[-1].y()
+        == first.y()
     ):
 
         result.extend(
-            addition[1:]
+            addition[
+                1:
+            ]
         )
 
     else:
@@ -1153,35 +1342,50 @@ def append_coords(
         )
 
 
+# ============================================================
+# ДВЕ ТОЧКИ НА ОДНОМ РЕБРЕ
+# ============================================================
+
 def same_edge_subpath(
     edge,
-    p1,
-    p2
+    projection1,
+    projection2
 ):
 
     reverse_result = False
 
+
     if (
-        p1["chainage"]
+        projection1["chainage"]
         >
-        p2["chainage"]
+        projection2["chainage"]
     ):
 
-        p1, p2 = p2, p1
+        projection1, projection2 = (
+            projection2,
+            projection1
+        )
+
         reverse_result = True
 
 
-    coords = edge["coords"]
-
-    result = [
-        p1["point"]
+    coords = edge[
+        "coords"
     ]
 
-    i1 = p1[
+
+    result = [
+        projection1[
+            "point"
+        ]
+    ]
+
+
+    i1 = projection1[
         "seg_index"
     ]
 
-    i2 = p2[
+    i2 = projection2[
         "seg_index"
     ]
 
@@ -1189,8 +1393,11 @@ def same_edge_subpath(
     if i1 == i2:
 
         result.append(
-            p2["point"]
+            projection2[
+                "point"
+            ]
         )
+
 
     else:
 
@@ -1201,19 +1408,25 @@ def same_edge_subpath(
             ]
         )
 
+
         result.append(
-            p2["point"]
+            projection2[
+                "point"
+            ]
         )
 
 
     if reverse_result:
+
         result.reverse()
+
 
     return result
 
 
 # ============================================================
-# СОБИРАЕМ ПУТЬ ОТ КРАЙНЕЙ КРАЙНЕЙ
+# СТРОИМ СВЯЗАННУЮ ЦЕПОЧКУ
+# МЕЖДУ ДВУМЯ КОНТРОЛЬНЫМИ ТОЧКАМИ
 # ============================================================
 
 def build_path(
@@ -1230,6 +1443,7 @@ def build_path(
         "edge_id"
     ]
 
+
     edge_a = edges[
         edge_a_id
     ]
@@ -1237,6 +1451,7 @@ def build_path(
     edge_b = edges[
         edge_b_id
     ]
+
 
     pa = anchor_a[
         "projection"
@@ -1247,7 +1462,10 @@ def build_path(
     ]
 
 
-    # Одна и та же линия
+    # --------------------------------------------------------
+    # ОДНО РЕБРО
+    # --------------------------------------------------------
+
     if edge_a_id == edge_b_id:
 
         coords = same_edge_subpath(
@@ -1256,6 +1474,7 @@ def build_path(
             pb
         )
 
+
         return {
             "coords": coords,
             "edge_ids": {
@@ -1263,6 +1482,10 @@ def build_path(
             }
         }
 
+
+    # --------------------------------------------------------
+    # ПРОБУЕМ ОБА КОНЦА ОБОИХ РЁБЕР
+    # --------------------------------------------------------
 
     options_a = [
         (
@@ -1276,6 +1499,7 @@ def build_path(
             pa["chainage"]
         )
     ]
+
 
     options_b = [
         (
@@ -1301,6 +1525,7 @@ def build_path(
             edge_b_id
         }
 
+
         distances, previous = dijkstra(
             node_a,
             forbidden
@@ -1315,7 +1540,9 @@ def build_path(
 
             total = (
                 partial_a
-                + distances[node_b]
+                + distances[
+                    node_b
+                ]
                 + partial_b
             )
 
@@ -1325,6 +1552,7 @@ def build_path(
                 node_b,
                 previous
             )
+
 
             if restored is None:
                 continue
@@ -1339,7 +1567,8 @@ def build_path(
                 {
                     "difference": abs(
                         total
-                        - expected_distance
+                        -
+                        expected_distance
                     ),
                     "total": total,
                     "node_a": node_a,
@@ -1351,8 +1580,16 @@ def build_path(
 
 
     if not possibilities:
+
         return None
 
+
+    # --------------------------------------------------------
+    # Важный момент:
+    # среди возможных связных путей выбираем тот,
+    # чья длина лучше соответствует разности
+    # километровых отметок.
+    # --------------------------------------------------------
 
     possibilities.sort(
         key=lambda x:
@@ -1360,7 +1597,9 @@ def build_path(
     )
 
 
-    best = possibilities[0]
+    best = possibilities[
+        0
+    ]
 
 
     result_coords = []
@@ -1377,7 +1616,7 @@ def build_path(
     )
 
 
-    # Середина сети
+    # Сеть между узлами
     for i, edge_id in enumerate(
         best["path_edges"]
     ):
@@ -1386,11 +1625,17 @@ def build_path(
             edge_id
         ]
 
+
         coords = oriented_edge_coords(
             edge,
-            best["path_nodes"][i],
-            best["path_nodes"][i + 1]
+            best[
+                "path_nodes"
+            ][i],
+            best[
+                "path_nodes"
+            ][i + 1]
         )
+
 
         append_coords(
             result_coords,
@@ -1410,8 +1655,11 @@ def build_path(
 
 
     used_edges = set(
-        best["path_edges"]
+        best[
+            "path_edges"
+        ]
     )
+
 
     used_edges.add(
         edge_a_id
@@ -1428,33 +1676,8 @@ def build_path(
     }
 
 
-path_result = build_path(
-    path_start_cp[
-        "graph_anchor"
-    ],
-    path_end_cp[
-        "graph_anchor"
-    ],
-    expected_span
-)
-
-
-if path_result is None:
-
-    raise Exception(
-        "Не удалось построить связанную "
-        "цепочку между крайними "
-        "контрольными точками."
-    )
-
-
-path_coords = path_result[
-    "coords"
-]
-
-
 # ============================================================
-# ПОДГОТАВЛИВАЕМ СЕГМЕНТЫ ЦЕПОЧКИ
+# ПОДГОТАВЛИВАЕМ СЕГМЕНТЫ СОБРАННОЙ ЦЕПОЧКИ
 # ============================================================
 
 def prepare_path_segments(
@@ -1473,21 +1696,33 @@ def prepare_path_segments(
         p1 = coords[i]
         p2 = coords[i + 1]
 
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
+
+        dx = (
+            p2.x()
+            - p1.x()
+        )
+
+        dy = (
+            p2.y()
+            - p1.y()
+        )
+
 
         map_sq = (
             dx * dx
             + dy * dy
         )
 
+
         if map_sq == 0:
             continue
+
 
         real_len = real_distance(
             p1,
             p2
         )
+
 
         segments.append(
             {
@@ -1501,21 +1736,19 @@ def prepare_path_segments(
             }
         )
 
+
         accumulated += real_len
 
 
-    return segments, accumulated
-
-
-path_segments, path_length = (
-    prepare_path_segments(
-        path_coords
+    return (
+        segments,
+        accumulated
     )
-)
 
 
 # ============================================================
-# ПРОЕКЦИЯ ТОЧКИ НА СОБРАННУЮ ЦЕПОЧКУ
+# ПРОЕКЦИЯ ИСХОДНОЙ ТОЧКИ
+# НА СОБРАННУЮ ЦЕПОЧКУ
 # ============================================================
 
 def project_to_path(
@@ -1529,20 +1762,33 @@ def project_to_path(
 
     for seg in segments:
 
-        p1 = seg["p1"]
+        p1 = seg[
+            "p1"
+        ]
 
-        vx = point.x() - p1.x()
-        vy = point.y() - p1.y()
+
+        vx = (
+            point.x()
+            - p1.x()
+        )
+
+        vy = (
+            point.y()
+            - p1.y()
+        )
+
 
         t = (
             vx * seg["dx"]
             + vy * seg["dy"]
         ) / seg["map_sq"]
 
+
         t = max(
             0.0,
             min(1.0, t)
         )
+
 
         px = (
             p1.x()
@@ -1554,8 +1800,17 @@ def project_to_path(
             + t * seg["dy"]
         )
 
-        dx = point.x() - px
-        dy = point.y() - py
+
+        dx = (
+            point.x()
+            - px
+        )
+
+        dy = (
+            point.y()
+            - py
+        )
+
 
         map_sq = (
             dx * dx
@@ -1574,6 +1829,7 @@ def project_to_path(
                 py
             )
 
+
             best = {
                 "point": projected,
                 "chainage": (
@@ -1587,179 +1843,17 @@ def project_to_path(
                 )
             }
 
-            best_map_sq = map_sq
+
+            best_map_sq = (
+                map_sq
+            )
 
 
     return best
 
 
 # ============================================================
-# КАЛИБРОВКА
-#
-# ВЫБРАННУЮ ТОЧКУ НЕ ИСПОЛЬЗУЕМ
-# ============================================================
-
-calibration = []
-
-
-for cp in usable_controls:
-
-    if cp["fid"] == selected_feature.id():
-        continue
-
-    projection = project_to_path(
-        cp["point"],
-        path_segments
-    )
-
-    if projection is None:
-        continue
-
-    calibration.append(
-        {
-            "km": cp["km"],
-            "chainage": projection[
-                "chainage"
-            ],
-            "distance": projection[
-                "distance"
-            ]
-        }
-    )
-
-
-if len(calibration) < MIN_CALIBRATION_POINTS:
-
-    raise Exception(
-        f"Для калибровки найдено только "
-        f"{len(calibration)} соседних точек. "
-        f"Нужно минимум "
-        f"{MIN_CALIBRATION_POINTS}."
-    )
-
-
-# ============================================================
-# ПРОВЕРЯЕМ ОБА НАПРАВЛЕНИЯ
-# ============================================================
-
-# Прямое:
-# chainage = km * 1000 + offset
-
-forward_offsets = [
-    item["chainage"]
-    -
-    item["km"] * 1000.0
-
-    for item in calibration
-]
-
-forward_offset = median(
-    forward_offsets
-)
-
-forward_residuals = [
-    abs(
-        item["chainage"]
-        -
-        (
-            item["km"] * 1000.0
-            + forward_offset
-        )
-    )
-
-    for item in calibration
-]
-
-forward_error = median(
-    forward_residuals
-)
-
-
-# Обратное:
-# chainage = offset - km * 1000
-
-reverse_offsets = [
-    item["chainage"]
-    +
-    item["km"] * 1000.0
-
-    for item in calibration
-]
-
-reverse_offset = median(
-    reverse_offsets
-)
-
-reverse_residuals = [
-    abs(
-        item["chainage"]
-        -
-        (
-            reverse_offset
-            -
-            item["km"] * 1000.0
-        )
-    )
-
-    for item in calibration
-]
-
-reverse_error = median(
-    reverse_residuals
-)
-
-
-if forward_error <= reverse_error:
-
-    direction = "ПРЯМОЕ"
-
-    offset = forward_offset
-
-    target_chainage = (
-        selected_km * 1000.0
-        + offset
-    )
-
-    residuals = forward_residuals
-
-else:
-
-    direction = "ОБРАТНОЕ"
-
-    offset = reverse_offset
-
-    target_chainage = (
-        offset
-        -
-        selected_km * 1000.0
-    )
-
-    residuals = reverse_residuals
-
-
-# ============================================================
-# ПРОВЕРКА: ПОПАДАЕМ ЛИ В НАШУ ЦЕПОЧКУ
-# ============================================================
-
-if (
-    target_chainage < 0
-    or
-    target_chainage > path_length
-):
-
-    raise Exception(
-        "Расчётная километровая отметка "
-        "оказалась за пределами "
-        "построенной цепочки.\n"
-        f"Расчёт: "
-        f"{target_chainage / 1000:.3f} км\n"
-        f"Длина цепочки: "
-        f"{path_length / 1000:.3f} км"
-    )
-
-
-# ============================================================
-# ТОЧКА НА ЦЕПОЧКЕ ПО РЕАЛЬНОМУ РАССТОЯНИЮ
+# ПОЛУЧЕНИЕ ТОЧКИ ПО КИЛОМЕТРАЖУ ЦЕПОЧКИ
 # ============================================================
 
 def point_at_chainage(
@@ -1774,6 +1868,7 @@ def point_at_chainage(
             + seg["real_len"]
         )
 
+
         if target <= seg_end:
 
             remaining = (
@@ -1781,66 +1876,54 @@ def point_at_chainage(
                 - seg["start"]
             )
 
+
             if seg["real_len"] <= 0:
+
                 return QgsPointXY(
                     seg["p1"]
                 )
+
 
             fraction = (
                 remaining
                 / seg["real_len"]
             )
 
+
             fraction = max(
                 0.0,
                 min(1.0, fraction)
             )
 
+
             x = (
                 seg["p1"].x()
-                +
-                fraction
+                + fraction
                 * seg["dx"]
             )
 
             y = (
                 seg["p1"].y()
-                +
-                fraction
+                + fraction
                 * seg["dy"]
             )
+
 
             return QgsPointXY(
                 x,
                 y
             )
 
+
     return QgsPointXY(
-        segments[-1]["p2"]
+        segments[-1][
+            "p2"
+        ]
     )
 
 
-new_point = point_at_chainage(
-    target_chainage,
-    path_segments
-)
-
-
-old_point = QgsPointXY(
-    selected_feature
-    .geometry()
-    .asPoint()
-)
-
-
-move_distance = real_distance(
-    old_point,
-    new_point
-)
-
-
 # ============================================================
-# ПЕРЕМЕЩАЕМ ТОЛЬКО ВЫБРАННУЮ ТОЧКУ
+# НАЧИНАЕМ РЕДАКТИРОВАНИЕ
 # ============================================================
 
 if not points.isEditable():
@@ -1848,153 +1931,729 @@ if not points.isEditable():
     points.startEditing()
 
 
-success = points.changeGeometry(
-    selected_feature.id(),
-    QgsGeometry.fromPointXY(
+# ============================================================
+# ОБРАБОТКА ВСЕХ ВЫДЕЛЕННЫХ ТОЧЕК
+# ============================================================
+
+moved_count = 0
+skipped_count = 0
+error_count = 0
+
+all_used_pipe_fids = set()
+
+
+for number, selected_fid in enumerate(
+    selected_ids,
+    start=1
+):
+
+    print("")
+    print("")
+    print("=" * 110)
+    print(
+        f"[{number}/{len(selected_ids)}] "
+        f"ОБРАБОТКА ТОЧКИ"
+    )
+    print("=" * 110)
+
+
+    # --------------------------------------------------------
+    # ИСХОДНАЯ ТОЧКА
+    # --------------------------------------------------------
+
+    selected_item = point_snapshot.get(
+        selected_fid
+    )
+
+
+    if selected_item is None:
+
+        print(
+            f"FID {selected_fid}: "
+            f"не удалось разобрать Name "
+            f"или нет геометрии."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    selected_km = selected_item[
+        "km"
+    ]
+
+    selected_route = selected_item[
+        "route"
+    ]
+
+    route_norm = selected_item[
+        "route_norm"
+    ]
+
+
+    print(
+        f"Точка: "
+        f"{selected_item['name']}"
+    )
+
+
+    # --------------------------------------------------------
+    # ВСЕ ТОЧКИ ЭТОГО МАРШРУТА
+    # --------------------------------------------------------
+
+    route_points = route_index.get(
+        route_norm,
+        []
+    )
+
+
+    selected_index = None
+
+
+    for i, item in enumerate(
+        route_points
+    ):
+
+        if item["fid"] == selected_fid:
+
+            selected_index = i
+            break
+
+
+    if selected_index is None:
+
+        print(
+            "ПРОПУСК: точка не найдена "
+            "в индексе маршрута."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    # --------------------------------------------------------
+    # СОСЕДНИЕ КОНТРОЛЬНЫЕ ТОЧКИ
+    # --------------------------------------------------------
+
+    start_i = max(
+        0,
+        selected_index
+        - CONTROL_POINTS_EACH_SIDE
+    )
+
+
+    end_i = min(
+        len(route_points),
+        selected_index
+        + CONTROL_POINTS_EACH_SIDE
+        + 1
+    )
+
+
+    controls = []
+
+
+    for item in route_points[
+        start_i:end_i
+    ]:
+
+        cp = dict(
+            item
+        )
+
+
+        cp[
+            "anchor"
+        ] = choose_local_feature(
+            cp
+        )
+
+
+        cp[
+            "graph_anchor"
+        ] = anchor_to_graph(
+            cp,
+            cp["anchor"]
+        )
+
+
+        controls.append(
+            cp
+        )
+
+
+    # --------------------------------------------------------
+    # ПОКАЗЫВАЕМ ЛОКАЛЬНЫЕ ЯКОРЯ
+    # --------------------------------------------------------
+
+    print("")
+    print(
+        "Локальные якоря:"
+    )
+
+
+    for cp in controls:
+
+        anchor = cp[
+            "anchor"
+        ]
+
+
+        if anchor is None:
+
+            print(
+                f"  {cp['km']:10.3f} км | "
+                f"НЕ НАЙДЕНО"
+            )
+
+            continue
+
+
+        display_name = (
+            anchor["name"]
+            if anchor["name"]
+            else "<NULL>"
+        )
+
+
+        print(
+            f"  {cp['km']:10.3f} км | "
+            f"{anchor['distance'] / 1000:8.3f} км | "
+            f"{anchor['reason']:7s} | "
+            f"FID={anchor['fid']} | "
+            f"{display_name}"
+        )
+
+
+    # --------------------------------------------------------
+    # ТОЛЬКО ТОЧКИ, КОТОРЫЕ УДАЛОСЬ
+    # ПРИВЯЗАТЬ К ГРАФУ
+    # --------------------------------------------------------
+
+    usable_controls = [
+        cp
+        for cp in controls
+        if cp[
+            "graph_anchor"
+        ] is not None
+    ]
+
+
+    if len(
+        usable_controls
+    ) < 2:
+
+        print("")
+        print(
+            "ПРОПУСК: недостаточно "
+            "контрольных точек "
+            "с найденными линиями."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    # Выбранная точка сама тоже должна иметь якорь
+    selected_control = None
+
+
+    for cp in usable_controls:
+
+        if cp["fid"] == selected_fid:
+
+            selected_control = cp
+            break
+
+
+    if selected_control is None:
+
+        print("")
+        print(
+            "ПРОПУСК: для самой выбранной "
+            "точки не удалось определить "
+            "локальную линию."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    # --------------------------------------------------------
+    # КРАЙНИЕ КОНТРОЛЬНЫЕ ТОЧКИ
+    #
+    # Цепочка будет ориентирована:
+    #
+    # меньший километраж -> больший километраж
+    #
+    # Поэтому обратное направление отдельно
+    # определять больше не нужно.
+    # --------------------------------------------------------
+
+    path_start_cp = min(
+        usable_controls,
+        key=lambda x:
+        x["km"]
+    )
+
+
+    path_end_cp = max(
+        usable_controls,
+        key=lambda x:
+        x["km"]
+    )
+
+
+    if (
+        path_start_cp["fid"]
+        ==
+        path_end_cp["fid"]
+    ):
+
+        print("")
+        print(
+            "ПРОПУСК: невозможно построить "
+            "диапазон километража."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    expected_span = (
+        path_end_cp["km"]
+        -
+        path_start_cp["km"]
+    ) * 1000.0
+
+
+    # --------------------------------------------------------
+    # СТРОИМ ЦЕПОЧКУ
+    # --------------------------------------------------------
+
+    path_result = build_path(
+        path_start_cp[
+            "graph_anchor"
+        ],
+        path_end_cp[
+            "graph_anchor"
+        ],
+        expected_span
+    )
+
+
+    if path_result is None:
+
+        print("")
+        print(
+            "ПРОПУСК: между крайними "
+            "контрольными точками "
+            "нет связного пути."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    path_segments, path_length = (
+        prepare_path_segments(
+            path_result[
+                "coords"
+            ]
+        )
+    )
+
+
+    if not path_segments:
+
+        print("")
+        print(
+            "ПРОПУСК: построенная "
+            "цепочка пустая."
+        )
+
+        skipped_count += 1
+        continue
+
+
+    print("")
+    print(
+        f"Цепочка: "
+        f"{path_start_cp['km']} км "
+        f"→ {path_end_cp['km']} км"
+    )
+
+    print(
+        f"Ожидаемый диапазон: "
+        f"{expected_span / 1000:.3f} км"
+    )
+
+    print(
+        f"Фактическая длина цепочки: "
+        f"{path_length / 1000:.3f} км"
+    )
+
+
+    # ========================================================
+    # НОВАЯ ЛОГИКА КИЛОМЕТРАЖА
+    #
+    # Цепочка начинается ровно в проекции
+    # минимальной контрольной точки.
+    #
+    # Поэтому:
+    #
+    # chainage =
+    #     километраж выбранной точки
+    #     -
+    #     километраж стартовой контрольной точки
+    #
+    # То есть:
+    #
+    # 0.1 км -> начало цепочки
+    # 23 км  -> 22.9 км по цепочке
+    #
+    # А если обрезанная линия начинается с 177 км:
+    #
+    # 177 км -> 0
+    # 200 км -> 23 км по цепочке
+    # ========================================================
+
+    if selected_fid == path_start_cp["fid"]:
+
+        target_chainage = 0.0
+
+
+    elif selected_fid == path_end_cp["fid"]:
+
+        # Если сама выбранная точка является
+        # последней опорой, ставим её именно
+        # в конец найденной цепочки.
+        target_chainage = (
+            path_length
+        )
+
+
+    else:
+
+        target_chainage = (
+            selected_km
+            -
+            path_start_cp["km"]
+        ) * 1000.0
+
+
+    # --------------------------------------------------------
+    # КОНТРОЛЬНЫЕ ТОЧКИ:
+    # смотрим, насколько хорошо их положение
+    # согласуется с новой километровой шкалой.
+    # --------------------------------------------------------
+
+    residuals = []
+
+
+    print("")
+    print(
+        "Контроль километража:"
+    )
+
+    print("-" * 110)
+
+
+    for cp in usable_controls:
+
+        projection = project_to_path(
+            cp["point"],
+            path_segments
+        )
+
+
+        if projection is None:
+            continue
+
+
+        expected_chainage = (
+            cp["km"]
+            -
+            path_start_cp["km"]
+        ) * 1000.0
+
+
+        residual = abs(
+            projection["chainage"]
+            -
+            expected_chainage
+        )
+
+
+        # Саму перемещаемую точку не используем
+        # для оценки качества.
+        if cp["fid"] != selected_fid:
+
+            residuals.append(
+                residual
+            )
+
+
+        print(
+            f"  {cp['km']:10.3f} км | "
+            f"расчёт "
+            f"{expected_chainage / 1000:9.3f} км | "
+            f"проекция старой точки "
+            f"{projection['chainage'] / 1000:9.3f} км | "
+            f"до трассы "
+            f"{projection['distance'] / 1000:7.3f} км | "
+            f"расхождение "
+            f"{residual:8.1f} м"
+        )
+
+
+    if residuals:
+
+        calibration_error = median(
+            residuals
+        )
+
+    else:
+
+        calibration_error = None
+
+
+    # --------------------------------------------------------
+    # ПРОВЕРЯЕМ, ПОПАДАЕТ ЛИ РАСЧЁТНАЯ
+    # ТОЧКА В НАЙДЕННУЮ ЦЕПОЧКУ
+    # --------------------------------------------------------
+
+    if (
+        target_chainage < 0
+        or
+        target_chainage > path_length
+    ):
+
+        print("")
+        print(
+            "ПРОПУСК: расчётная отметка "
+            "оказалась за пределами "
+            "построенной цепочки."
+        )
+
+        print(
+            f"Расчётное положение: "
+            f"{target_chainage / 1000:.3f} км"
+        )
+
+        print(
+            f"Длина цепочки: "
+            f"{path_length / 1000:.3f} км"
+        )
+
+        skipped_count += 1
+        continue
+
+
+    # --------------------------------------------------------
+    # ПОЛУЧАЕМ НОВУЮ КООРДИНАТУ
+    # --------------------------------------------------------
+
+    new_point = point_at_chainage(
+        target_chainage,
+        path_segments
+    )
+
+
+    if new_point is None:
+
+        print("")
+        print(
+            "ОШИБКА: не удалось получить "
+            "точку на расчётной отметке."
+        )
+
+        error_count += 1
+        continue
+
+
+    old_point = selected_item[
+        "point"
+    ]
+
+
+    move_distance = real_distance(
+        old_point,
         new_point
     )
-)
 
 
-if not success:
+    # --------------------------------------------------------
+    # ИЗМЕНЯЕМ ГЕОМЕТРИЮ
+    # --------------------------------------------------------
 
-    raise Exception(
-        "QGIS не смог изменить "
-        "геометрию выбранной точки."
+    success = points.changeGeometry(
+        selected_fid,
+        QgsGeometry.fromPointXY(
+            new_point
+        )
     )
 
 
-points.triggerRepaint()
+    if not success:
+
+        print("")
+        print(
+            "ОШИБКА: QGIS не смог "
+            "изменить геометрию точки."
+        )
+
+        error_count += 1
+        continue
 
 
-# ============================================================
-# ВЫДЕЛЯЕМ ИСПОЛЬЗОВАННУЮ ЦЕПОЧКУ pipeline_1
-# ============================================================
+    moved_count += 1
 
-path_fids = sorted(
-    set(
+
+    # --------------------------------------------------------
+    # СОБИРАЕМ FID pipeline_1,
+    # использованные хотя бы одной точкой.
+    # --------------------------------------------------------
+
+    path_pipe_fids = {
         edges[edge_id]["fid"]
         for edge_id
         in path_result[
             "edge_ids"
         ]
+    }
+
+
+    all_used_pipe_fids.update(
+        path_pipe_fids
     )
-)
 
 
+    # --------------------------------------------------------
+    # ОТЧЁТ
+    # --------------------------------------------------------
+
+    print("")
+    print(
+        "РЕЗУЛЬТАТ:"
+    )
+
+    print(
+        f"  стартовая опорная отметка: "
+        f"{path_start_cp['km']} км"
+    )
+
+    print(
+        f"  расчётное положение "
+        f"на цепочке: "
+        f"{target_chainage / 1000:.3f} км"
+    )
+
+    print(
+        f"  точка перемещена на: "
+        f"{move_distance / 1000:.3f} км"
+    )
+
+
+    if calibration_error is not None:
+
+        print(
+            f"  медианное расхождение "
+            f"контрольных точек: "
+            f"{calibration_error:.1f} м"
+        )
+
+
+        if (
+            calibration_error
+            > CALIBRATION_WARNING_M
+        ):
+
+            print(
+                "  !!! ВНИМАНИЕ: "
+                "контрольные точки "
+                "плохо согласуются "
+                "с километровой шкалой."
+            )
+
+
+    if move_distance > MOVE_WARNING_M:
+
+        print(
+            "  !!! ВНИМАНИЕ: "
+            f"большое перемещение "
+            f"({move_distance / 1000:.1f} км)"
+        )
+
+
+# ============================================================
+# ОБНОВЛЯЕМ СЛОИ
+# ============================================================
+
+points.triggerRepaint()
+
+
+# В pipeline_1 выделяем объединение всех цепочек,
+# которые использовались при успешном переносе.
 pipes.removeSelection()
 
-pipes.selectByIds(
-    path_fids
-)
+
+if all_used_pipe_fids:
+
+    pipes.selectByIds(
+        sorted(
+            all_used_pipe_fids
+        )
+    )
+
 
 pipes.triggerRepaint()
 
 
 # ============================================================
-# ОТЧЁТ
+# ИТОГ
 # ============================================================
 
 print("")
-print("=" * 100)
-print("КАЛИБРОВКА КИЛОМЕТРАЖА")
-print("=" * 100)
+print("")
+print("=" * 110)
+print("ГОТОВО")
+print("=" * 110)
 
 print(
-    f"Точка: "
-    f"{selected_feature[POINT_NAME_FIELD]}"
+    f"Выделено изначально: "
+    f"{len(selected_ids)}"
 )
 
 print(
-    f"Маршрут: "
-    f"{selected_route}"
+    f"Перемещено:          "
+    f"{moved_count}"
 )
 
 print(
-    f"Километровая отметка: "
-    f"{selected_km} км"
+    f"Пропущено:           "
+    f"{skipped_count}"
+)
+
+print(
+    f"Ошибок:              "
+    f"{error_count}"
+)
+
+print(
+    f"Использовано объектов "
+    f"pipeline_1:          "
+    f"{len(all_used_pipe_fids)}"
 )
 
 print("")
 print(
-    f"Цепочка построена от "
-    f"{path_start_cp['km']} км "
-    f"до {path_end_cp['km']} км"
+    "Изменения автоматически НЕ СОХРАНЕНЫ."
 )
 
 print(
-    f"Длина цепочки: "
-    f"{path_length / 1000:.3f} км"
+    "Проверь перемещённые точки "
+    "визуально перед сохранением."
 )
 
-print(
-    f"Объектов pipeline_1: "
-    f"{len(path_fids)}"
-)
-
-print("")
-print(
-    f"Определённое направление: "
-    f"{direction}"
-)
-
-print(
-    f"Медианная ошибка калибровки: "
-    f"{median(residuals):.1f} м"
-)
-
-print("")
-print("Контрольные точки:")
-print("-" * 100)
-
-
-for item, residual in zip(
-    calibration,
-    residuals
-):
-
-    print(
-        f"{item['km']:10.3f} км | "
-        f"положение по цепочке "
-        f"{item['chainage'] / 1000:9.3f} км | "
-        f"до трассы "
-        f"{item['distance'] / 1000:7.3f} км | "
-        f"ошибка калибровки "
-        f"{residual:7.1f} м"
-    )
-
-
-print("")
-print("=" * 100)
-print("ПЕРЕНОС")
-print("=" * 100)
-
-print(
-    f"Расчётное положение "
-    f"на цепочке: "
-    f"{target_chainage / 1000:.3f} км"
-)
-
-print(
-    f"Точка перемещена на: "
-    f"{move_distance / 1000:.3f} км"
-)
-
-print("")
-print(
-    "Изменения автоматически "
-    "НЕ СОХРАНЕНЫ."
-)
-
-print(
-    "Проверь положение точки "
-    "на карте."
-)
-
-print(
-    "Если результат неправильный, "
-    "изменение можно отменить "
-    "обычной отменой редактирования."
-)
-
-print("=" * 100)
+print("=" * 110)
