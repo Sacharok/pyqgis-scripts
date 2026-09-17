@@ -1,8 +1,15 @@
+import re
+
 from qgis.core import (
     QgsProject,
     QgsPointXY,
     QgsDistanceArea
 )
+
+
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
 
 POINT_LAYER_NAME = "Копия точек"
 PIPE_LAYER_NAME = "pipeline_1"
@@ -10,43 +17,231 @@ PIPE_LAYER_NAME = "pipeline_1"
 POINT_NAME_FIELD = "Name"
 PIPE_NAME_FIELD = "name"
 
-TOP_COUNT = 15
+# Сначала отсекаем вообще далёкие объекты.
+# Внутри этого радиуса уже анализируем name.
+SEARCH_RADIUS_M = 80000
+
+# Сколько кандидатов показать в консоли
+SHOW_TOP = 20
 
 
-points = QgsProject.instance().mapLayersByName(
+# ============================================================
+# НОРМАЛИЗАЦИЯ
+# ============================================================
+
+def normalize_name(value):
+
+    if value is None:
+        return ""
+
+    text = str(value).strip().lower()
+    text = text.replace("ё", "е")
+
+    return re.sub(
+        r"[^0-9a-zа-я]+",
+        "",
+        text
+    )
+
+
+# ============================================================
+# РАЗБОР NAME ТОЧКИ
+# ============================================================
+
+def parse_point_name(value):
+    """
+    Примеры:
+
+    76,6 км Елец-Курск-Диканька
+        -> 76.6
+        -> Елец-Курск-Диканька
+
+    ТСГ 31 км УКПГ-15-КС Ямбургская
+        -> 31
+        -> УКПГ-15-КС Ямбургская
+    """
+
+    if value is None:
+        return None, None
+
+    text = str(value).strip()
+
+    match = re.search(
+        r"(\d+(?:[.,]\d+)?)\s*км\b[\s\-–—]*(.+)$",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    if not match:
+        return None, None
+
+    try:
+        km_value = float(
+            match.group(1).replace(",", ".")
+        )
+    except ValueError:
+        return None, None
+
+    route_name = match.group(2).strip()
+
+    return km_value, route_name
+
+
+# ============================================================
+# ОЦЕНКА СОВПАДЕНИЯ НАЗВАНИЯ
+# ============================================================
+
+def name_priority(route_norm, pipe_norm):
+    """
+    None = название не соответствует маршруту.
+
+    Чем меньше значение — тем лучше совпадение.
+
+    Например:
+
+    точка:
+        Ухта-Торжок
+
+    pipeline:
+        Ухта-Торжок       -> 0
+        Ухта-Торжок 1     -> 1
+        Ухта-Торжок 2     -> 20
+        Ухта-Торжок 3     -> 30
+        Ухта-Торжок 2 Ямал -> 120
+    """
+
+    if not pipe_norm:
+        return None
+
+    # Полное совпадение
+    if pipe_norm == route_norm:
+        return 0
+
+    # Продолжение базового названия
+    if not pipe_norm.startswith(route_norm):
+        return None
+
+    suffix = pipe_norm[
+        len(route_norm):
+    ]
+
+    if suffix == "":
+        return 0
+
+    if suffix == "1":
+        return 1
+
+    if suffix.isdigit():
+
+        number = int(suffix)
+
+        if number == 1:
+            return 1
+
+        return number * 10
+
+    match = re.match(
+        r"^(\d+)(.*)$",
+        suffix
+    )
+
+    if match:
+
+        number = int(
+            match.group(1)
+        )
+
+        extra = match.group(2)
+
+        priority = number * 10
+
+        if extra:
+            priority += 100
+
+        return priority
+
+    # Название начинается правильно,
+    # но дальше какой-то дополнительный текст
+    return 500
+
+
+# ============================================================
+# СЛОИ
+# ============================================================
+
+point_layers = QgsProject.instance().mapLayersByName(
     POINT_LAYER_NAME
-)[0]
+)
 
-pipes = QgsProject.instance().mapLayersByName(
+pipe_layers = QgsProject.instance().mapLayersByName(
     PIPE_LAYER_NAME
-)[0]
+)
 
+if not point_layers:
+    raise Exception(
+        f"Не найден слой '{POINT_LAYER_NAME}'"
+    )
+
+if not pipe_layers:
+    raise Exception(
+        f"Не найден слой '{PIPE_LAYER_NAME}'"
+    )
+
+points = point_layers[0]
+pipes = pipe_layers[0]
+
+
+# ============================================================
+# ВЫБРАННАЯ ТОЧКА
+# ============================================================
 
 selected = points.selectedFeatures()
 
 if len(selected) != 1:
     raise Exception(
-        "Выдели ровно одну точку в слое 'Копия точек'."
+        "Выдели ровно одну точку "
+        "в слое 'Копия точек'."
     )
 
 
 point_feature = selected[0]
+
+if not point_feature.hasGeometry():
+    raise Exception(
+        "У выбранной точки нет геометрии."
+    )
+
+
+point_name = point_feature[
+    POINT_NAME_FIELD
+]
+
+km_value, route_name = parse_point_name(
+    point_name
+)
+
+if km_value is None:
+
+    raise Exception(
+        f"Не удалось разобрать Name: "
+        f"{point_name}"
+    )
+
+
+route_norm = normalize_name(
+    route_name
+)
+
 point_geom = point_feature.geometry()
 
-print("")
-print("=" * 90)
-print("БЛИЖАЙШИЕ ОБЪЕКТЫ pipeline_1")
-print("=" * 90)
-
-print(
-    f"Точка: {point_feature[POINT_NAME_FIELD]}"
+point_xy = QgsPointXY(
+    point_geom.asPoint()
 )
 
 
-# ----------------------------------------------------------
-# QgsDistanceArea нужен, чтобы расстояния выводить
-# нормально при EPSG:3857
-# ----------------------------------------------------------
+# ============================================================
+# РЕАЛЬНЫЕ РАССТОЯНИЯ
+# ============================================================
 
 da = QgsDistanceArea()
 
@@ -55,8 +250,14 @@ da.setSourceCrs(
     QgsProject.instance().transformContext()
 )
 
-da.setEllipsoid("WGS84")
+da.setEllipsoid(
+    "WGS84"
+)
 
+
+# ============================================================
+# СОБИРАЕМ КАНДИДАТОВ ПО БЛИЗОСТИ
+# ============================================================
 
 candidates = []
 
@@ -71,7 +272,7 @@ for feature in pipes.getFeatures():
     if geom.isEmpty():
         continue
 
-    # Ближайшая точка на линии
+
     nearest_geom = geom.nearestPoint(
         point_geom
     )
@@ -79,79 +280,272 @@ for feature in pipes.getFeatures():
     if nearest_geom.isEmpty():
         continue
 
-    source_point = QgsPointXY(
-        point_geom.asPoint()
-    )
 
-    nearest_point = QgsPointXY(
+    nearest_xy = QgsPointXY(
         nearest_geom.asPoint()
     )
 
-    # Реальное расстояние
+
     distance_m = da.measureLine(
-        source_point,
-        nearest_point
+        point_xy,
+        nearest_xy
     )
+
+
+    # --------------------------------------------------------
+    # ПЕРВЫЙ ФИЛЬТР — БЛИЗОСТЬ
+    # --------------------------------------------------------
+
+    if distance_m > SEARCH_RADIUS_M:
+        continue
+
 
     raw_name = feature[
         PIPE_NAME_FIELD
     ]
 
-    if raw_name is None:
-        name = "<NULL>"
-    else:
-        name = str(raw_name).strip()
 
-        if not name:
-            name = "<EMPTY>"
+    if raw_name is None:
+
+        pipe_name = ""
+        pipe_name_display = "<NULL>"
+
+    else:
+
+        pipe_name = str(
+            raw_name
+        ).strip()
+
+        pipe_name_display = (
+            pipe_name
+            if pipe_name
+            else "<EMPTY>"
+        )
+
+
+    pipe_norm = normalize_name(
+        pipe_name
+    )
+
+
+    priority = name_priority(
+        route_norm,
+        pipe_norm
+    )
+
+
+    if priority is not None:
+
+        name_status = "MATCH"
+
+    elif not pipe_norm:
+
+        name_status = "NULL"
+
+    else:
+
+        name_status = "OTHER"
+
 
     candidates.append(
         {
             "fid": feature.id(),
-            "name": name,
-            "distance": distance_m
+            "distance": distance_m,
+            "name": pipe_name,
+            "display_name": pipe_name_display,
+            "priority": priority,
+            "status": name_status
         }
     )
 
+
+if not candidates:
+
+    raise Exception(
+        f"В радиусе "
+        f"{SEARCH_RADIUS_M / 1000:.0f} км "
+        f"нет объектов pipeline_1."
+    )
+
+
+# ============================================================
+# СОРТИРУЕМ ПО РАССТОЯНИЮ
+# ============================================================
 
 candidates.sort(
     key=lambda x: x["distance"]
 )
 
 
-print("")
+# ============================================================
+# ВТОРОЙ ЭТАП — NAME
+# ============================================================
 
-for i, item in enumerate(
-    candidates[:TOP_COUNT],
-    start=1
-):
+name_matches = [
+    item
+    for item in candidates
+    if item["priority"] is not None
+]
 
-    print(
-        f"{i:2d}. "
-        f"{item['distance'] / 1000:8.3f} км | "
-        f"FID={item['fid']} | "
-        f"name={item['name']}"
+
+if name_matches:
+
+    # --------------------------------------------------------
+    # ЕСТЬ СОВПАДЕНИЕ NAME
+    #
+    # Сначала лучший тип имени,
+    # затем ближайший среди него.
+    # --------------------------------------------------------
+
+    best_priority = min(
+        item["priority"]
+        for item in name_matches
     )
 
 
-# ----------------------------------------------------------
-# Для удобства выделяем 5 ближайших линий
-# ----------------------------------------------------------
+    best_name_matches = [
+        item
+        for item in name_matches
+        if item["priority"] == best_priority
+    ]
 
-nearest_ids = [
-    item["fid"]
-    for item in candidates[:5]
-]
+
+    best_name_matches.sort(
+        key=lambda x: x["distance"]
+    )
+
+
+    chosen = best_name_matches[0]
+
+    selection_reason = (
+        "НАЙДЕНО СОВПАДЕНИЕ NAME — "
+        "выбрана линия с подходящим названием"
+    )
+
+
+else:
+
+    # --------------------------------------------------------
+    # СОВПАДЕНИЯ NAME НЕТ
+    #
+    # NULL не лучше OTHER.
+    # Просто берём геометрически ближайшую линию.
+    # --------------------------------------------------------
+
+    chosen = candidates[0]
+
+    selection_reason = (
+        "СОВПАДЕНИЯ NAME НЕТ — "
+        "выбрана ближайшая линия"
+    )
+
+
+# ============================================================
+# ОТЧЁТ
+# ============================================================
+
+print("")
+print("=" * 100)
+print("ВЫБОР ЛОКАЛЬНОЙ ЛИНИИ")
+print("=" * 100)
+
+print(
+    f"Точка:    {point_name}"
+)
+
+print(
+    f"Маршрут:  {route_name}"
+)
+
+print(
+    f"Отметка:  {km_value} км"
+)
+
+print(
+    f"Радиус поиска: "
+    f"{SEARCH_RADIUS_M / 1000:.0f} км"
+)
+
+
+print("")
+print("КАНДИДАТЫ:")
+print("-" * 100)
+
+
+for number, item in enumerate(
+    candidates[:SHOW_TOP],
+    start=1
+):
+
+    priority_text = (
+        "-"
+        if item["priority"] is None
+        else str(item["priority"])
+    )
+
+
+    print(
+        f"{number:2d}. "
+        f"{item['distance'] / 1000:8.3f} км | "
+        f"{item['status']:5s} | "
+        f"priority={priority_text:>3s} | "
+        f"FID={item['fid']} | "
+        f"{item['display_name']}"
+    )
+
+
+print("")
+print("=" * 100)
+print("ВЫБРАНО")
+print("=" * 100)
+
+print(
+    selection_reason
+)
+
+print("")
+
+print(
+    f"FID:        {chosen['fid']}"
+)
+
+print(
+    f"Расстояние: "
+    f"{chosen['distance'] / 1000:.3f} км"
+)
+
+print(
+    f"Статус name: "
+    f"{chosen['status']}"
+)
+
+print(
+    f"name:       "
+    f"{chosen['display_name']}"
+)
+
+
+# ============================================================
+# ВЫДЕЛЯЕМ ТОЛЬКО ВЫБРАННЫЙ ОБЪЕКТ
+# ============================================================
 
 pipes.removeSelection()
-pipes.selectByIds(nearest_ids)
+
+pipes.selectByIds(
+    [chosen["fid"]]
+)
+
 pipes.triggerRepaint()
 
 
 print("")
 print(
-    "Пять ближайших объектов pipeline_1 "
-    "выделены на карте."
+    "Выбранный объект pipeline_1 "
+    "выделен на карте."
 )
 
-print("=" * 90)
+print(
+    "Точки НЕ перемещались."
+)
+
+print("=" * 100)
