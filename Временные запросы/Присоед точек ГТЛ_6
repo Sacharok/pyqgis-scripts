@@ -1,7 +1,10 @@
 import re
+import math
+import heapq
 
 from qgis.core import (
     QgsProject,
+    QgsGeometry,
     QgsPointXY,
     QgsDistanceArea
 )
@@ -17,12 +20,21 @@ PIPE_LAYER_NAME = "pipeline_1"
 POINT_NAME_FIELD = "Name"
 PIPE_NAME_FIELD = "name"
 
-# Сначала отсекаем вообще далёкие объекты.
-# Внутри этого радиуса уже анализируем name.
+# Радиус, внутри которого ищем локальную линию для точки.
+# Это не означает, что обязательно выберем ближайшую:
+# если есть подходящий name, он получает приоритет.
 SEARCH_RADIUS_M = 80000
 
-# Сколько кандидатов показать в консоли
-SHOW_TOP = 20
+# Сколько соседних точек маршрута использовать
+# с каждой стороны от выбранной.
+CONTROL_POINTS_EACH_SIDE = 3
+
+# Допуск соединения КОНЦОВ объектов pipeline_1.
+#
+# ВАЖНО:
+# это координатные единицы EPSG:3857,
+# а не расчётное расстояние километража.
+CONNECT_TOLERANCE = 5.0
 
 
 # ============================================================
@@ -76,10 +88,13 @@ def parse_point_name(value):
         return None, None
 
     try:
+
         km_value = float(
             match.group(1).replace(",", ".")
         )
+
     except ValueError:
+
         return None, None
 
     route_name = match.group(2).strip()
@@ -88,36 +103,22 @@ def parse_point_name(value):
 
 
 # ============================================================
-# ОЦЕНКА СОВПАДЕНИЯ НАЗВАНИЯ
+# СОВПАДЕНИЕ НАЗВАНИЯ
 # ============================================================
 
 def name_priority(route_norm, pipe_norm):
     """
-    None = название не соответствует маршруту.
+    Та же логика, которая уже хорошо сработала.
 
-    Чем меньше значение — тем лучше совпадение.
-
-    Например:
-
-    точка:
-        Ухта-Торжок
-
-    pipeline:
-        Ухта-Торжок       -> 0
-        Ухта-Торжок 1     -> 1
-        Ухта-Торжок 2     -> 20
-        Ухта-Торжок 3     -> 30
-        Ухта-Торжок 2 Ямал -> 120
+    Меньше значение = лучше совпадение.
     """
 
     if not pipe_norm:
         return None
 
-    # Полное совпадение
     if pipe_norm == route_norm:
         return 0
 
-    # Продолжение базового названия
     if not pipe_norm.startswith(route_norm):
         return None
 
@@ -140,6 +141,7 @@ def name_priority(route_norm, pipe_norm):
 
         return number * 10
 
+
     match = re.match(
         r"^(\d+)(.*)$",
         suffix
@@ -160,8 +162,7 @@ def name_priority(route_norm, pipe_norm):
 
         return priority
 
-    # Название начинается правильно,
-    # но дальше какой-то дополнительный текст
+
     return 500
 
 
@@ -177,6 +178,7 @@ pipe_layers = QgsProject.instance().mapLayersByName(
     PIPE_LAYER_NAME
 )
 
+
 if not point_layers:
     raise Exception(
         f"Не найден слой '{POINT_LAYER_NAME}'"
@@ -186,6 +188,7 @@ if not pipe_layers:
     raise Exception(
         f"Не найден слой '{PIPE_LAYER_NAME}'"
     )
+
 
 points = point_layers[0]
 pipes = pipe_layers[0]
@@ -198,49 +201,43 @@ pipes = pipe_layers[0]
 selected = points.selectedFeatures()
 
 if len(selected) != 1:
+
     raise Exception(
-        "Выдели ровно одну точку "
+        "Выдели ровно ОДНУ точку "
         "в слое 'Копия точек'."
     )
 
 
-point_feature = selected[0]
+selected_feature = selected[0]
 
-if not point_feature.hasGeometry():
+if not selected_feature.hasGeometry():
+
     raise Exception(
         "У выбранной точки нет геометрии."
     )
 
 
-point_name = point_feature[
-    POINT_NAME_FIELD
-]
-
-km_value, route_name = parse_point_name(
-    point_name
+selected_km, selected_route = parse_point_name(
+    selected_feature[
+        POINT_NAME_FIELD
+    ]
 )
 
-if km_value is None:
+
+if selected_km is None:
 
     raise Exception(
-        f"Не удалось разобрать Name: "
-        f"{point_name}"
+        "Не удалось разобрать Name выбранной точки."
     )
 
 
 route_norm = normalize_name(
-    route_name
-)
-
-point_geom = point_feature.geometry()
-
-point_xy = QgsPointXY(
-    point_geom.asPoint()
+    selected_route
 )
 
 
 # ============================================================
-# РЕАЛЬНЫЕ РАССТОЯНИЯ
+# REAL DISTANCE
 # ============================================================
 
 da = QgsDistanceArea()
@@ -255,11 +252,37 @@ da.setEllipsoid(
 )
 
 
+def real_distance(p1, p2):
+
+    return da.measureLine(
+        QgsPointXY(p1),
+        QgsPointXY(p2)
+    )
+
+
+def coords_real_length(coords):
+
+    total = 0.0
+
+    for i in range(
+        len(coords) - 1
+    ):
+
+        total += real_distance(
+            coords[i],
+            coords[i + 1]
+        )
+
+    return total
+
+
 # ============================================================
-# СОБИРАЕМ КАНДИДАТОВ ПО БЛИЗОСТИ
+# ЧИТАЕМ ВСЕ ОБЪЕКТЫ pipeline_1
+#
+# Здесь НИЧЕГО не фильтруем по name.
 # ============================================================
 
-candidates = []
+pipe_features = []
 
 
 for feature in pipes.getFeatures():
@@ -273,33 +296,6 @@ for feature in pipes.getFeatures():
         continue
 
 
-    nearest_geom = geom.nearestPoint(
-        point_geom
-    )
-
-    if nearest_geom.isEmpty():
-        continue
-
-
-    nearest_xy = QgsPointXY(
-        nearest_geom.asPoint()
-    )
-
-
-    distance_m = da.measureLine(
-        point_xy,
-        nearest_xy
-    )
-
-
-    # --------------------------------------------------------
-    # ПЕРВЫЙ ФИЛЬТР — БЛИЗОСТЬ
-    # --------------------------------------------------------
-
-    if distance_m > SEARCH_RADIUS_M:
-        continue
-
-
     raw_name = feature[
         PIPE_NAME_FIELD
     ]
@@ -308,7 +304,6 @@ for feature in pipes.getFeatures():
     if raw_name is None:
 
         pipe_name = ""
-        pipe_name_display = "<NULL>"
 
     else:
 
@@ -316,128 +311,1203 @@ for feature in pipes.getFeatures():
             raw_name
         ).strip()
 
-        pipe_name_display = (
-            pipe_name
-            if pipe_name
-            else "<EMPTY>"
-        )
 
-
-    pipe_norm = normalize_name(
-        pipe_name
-    )
-
-
-    priority = name_priority(
-        route_norm,
-        pipe_norm
-    )
-
-
-    if priority is not None:
-
-        name_status = "MATCH"
-
-    elif not pipe_norm:
-
-        name_status = "NULL"
-
-    else:
-
-        name_status = "OTHER"
-
-
-    candidates.append(
+    pipe_features.append(
         {
             "fid": feature.id(),
-            "distance": distance_m,
             "name": pipe_name,
-            "display_name": pipe_name_display,
-            "priority": priority,
-            "status": name_status
+            "norm": normalize_name(
+                pipe_name
+            ),
+            "geom": geom
         }
     )
 
 
-if not candidates:
+# ============================================================
+# РАБОЧИЙ ВЫБОР ЛОКАЛЬНОЙ ЛИНИИ
+#
+# 1. сначала пространственный фильтр;
+# 2. если есть совпадение name — берём его;
+# 3. если совпадения нет — ближайший объект вообще.
+# ============================================================
 
-    raise Exception(
-        f"В радиусе "
-        f"{SEARCH_RADIUS_M / 1000:.0f} км "
-        f"нет объектов pipeline_1."
+def choose_local_feature(
+    point_xy,
+    route_norm
+):
+
+    point_geom = (
+        QgsGeometry.fromPointXY(
+            point_xy
+        )
+    )
+
+    candidates = []
+
+
+    for item in pipe_features:
+
+        nearest_geom = (
+            item["geom"]
+            .nearestPoint(
+                point_geom
+            )
+        )
+
+        if nearest_geom.isEmpty():
+            continue
+
+
+        nearest_xy = QgsPointXY(
+            nearest_geom.asPoint()
+        )
+
+
+        distance_m = real_distance(
+            point_xy,
+            nearest_xy
+        )
+
+
+        if distance_m > SEARCH_RADIUS_M:
+            continue
+
+
+        priority = name_priority(
+            route_norm,
+            item["norm"]
+        )
+
+
+        candidates.append(
+            {
+                "fid": item["fid"],
+                "name": item["name"],
+                "norm": item["norm"],
+                "distance": distance_m,
+                "priority": priority
+            }
+        )
+
+
+    if not candidates:
+
+        return None
+
+
+    # Сначала всё сортируем по расстоянию
+    candidates.sort(
+        key=lambda x:
+        x["distance"]
     )
 
 
+    name_matches = [
+        item
+        for item in candidates
+        if item["priority"] is not None
+    ]
+
+
+    if name_matches:
+
+        best_priority = min(
+            item["priority"]
+            for item in name_matches
+        )
+
+
+        best_name_matches = [
+            item
+            for item in name_matches
+            if item["priority"]
+            == best_priority
+        ]
+
+
+        best_name_matches.sort(
+            key=lambda x:
+            x["distance"]
+        )
+
+
+        chosen = dict(
+            best_name_matches[0]
+        )
+
+        chosen["reason"] = "MATCH"
+
+
+    else:
+
+        chosen = dict(
+            candidates[0]
+        )
+
+        chosen["reason"] = "NEAREST"
+
+
+    return chosen
+
+
 # ============================================================
-# СОРТИРУЕМ ПО РАССТОЯНИЮ
+# ТОЧКИ ЭТОГО МАРШРУТА
 # ============================================================
 
-candidates.sort(
-    key=lambda x: x["distance"]
+route_points = []
+
+
+for feature in points.getFeatures():
+
+    if not feature.hasGeometry():
+        continue
+
+
+    km, route = parse_point_name(
+        feature[
+            POINT_NAME_FIELD
+        ]
+    )
+
+
+    if km is None:
+        continue
+
+
+    if (
+        normalize_name(route)
+        != route_norm
+    ):
+        continue
+
+
+    route_points.append(
+        {
+            "fid": feature.id(),
+            "km": km,
+            "name": str(
+                feature[
+                    POINT_NAME_FIELD
+                ]
+            ),
+            "point": QgsPointXY(
+                feature.geometry().asPoint()
+            )
+        }
+    )
+
+
+route_points.sort(
+    key=lambda x:
+    x["km"]
 )
 
 
 # ============================================================
-# ВТОРОЙ ЭТАП — NAME
+# НАХОДИМ ВЫБРАННУЮ СРЕДИ НИХ
 # ============================================================
 
-name_matches = [
-    item
-    for item in candidates
-    if item["priority"] is not None
+selected_index = None
+
+
+for i, item in enumerate(
+    route_points
+):
+
+    if (
+        item["fid"]
+        == selected_feature.id()
+    ):
+
+        selected_index = i
+        break
+
+
+if selected_index is None:
+
+    raise Exception(
+        "Выбранная точка не найдена "
+        "среди точек маршрута."
+    )
+
+
+start_i = max(
+    0,
+    selected_index
+    - CONTROL_POINTS_EACH_SIDE
+)
+
+end_i = min(
+    len(route_points),
+    selected_index
+    + CONTROL_POINTS_EACH_SIDE
+    + 1
+)
+
+
+control_points = route_points[
+    start_i:end_i
 ]
 
 
-if name_matches:
+# ============================================================
+# ВЫБИРАЕМ ЛОКАЛЬНУЮ ЛИНИЮ
+# ДЛЯ КАЖДОЙ КОНТРОЛЬНОЙ ТОЧКИ
+# ============================================================
 
-    # --------------------------------------------------------
-    # ЕСТЬ СОВПАДЕНИЕ NAME
-    #
-    # Сначала лучший тип имени,
-    # затем ближайший среди него.
-    # --------------------------------------------------------
+print("")
+print("=" * 100)
+print("ЛОКАЛЬНЫЕ ЯКОРЯ")
+print("=" * 100)
 
-    best_priority = min(
-        item["priority"]
-        for item in name_matches
+print(
+    f"Маршрут: {selected_route}"
+)
+
+print("")
+
+
+for cp in control_points:
+
+    chosen = choose_local_feature(
+        cp["point"],
+        route_norm
     )
 
 
-    best_name_matches = [
-        item
-        for item in name_matches
-        if item["priority"] == best_priority
+    cp["anchor"] = chosen
+
+
+    if chosen is None:
+
+        print(
+            f"{cp['km']:10.3f} км | "
+            f"ЛИНИЯ НЕ НАЙДЕНА"
+        )
+
+        continue
+
+
+    display_name = (
+        chosen["name"]
+        if chosen["name"]
+        else "<NULL>"
+    )
+
+
+    print(
+        f"{cp['km']:10.3f} км | "
+        f"{chosen['distance'] / 1000:8.3f} км | "
+        f"{chosen['reason']:7s} | "
+        f"FID={chosen['fid']} | "
+        f"{display_name}"
+    )
+
+
+# ============================================================
+# СТРОИМ ГРАФ ИЗ ВСЕГО pipeline_1
+#
+# Name здесь вообще НЕ используется.
+# Только геометрическое соединение концов.
+# ============================================================
+
+nodes = {}
+node_grid = {}
+
+edges = []
+adjacency = {}
+
+edges_by_fid = {}
+
+next_node_id = 0
+
+
+def map_distance(
+    p1,
+    p2
+):
+
+    return math.hypot(
+        p1.x() - p2.x(),
+        p1.y() - p2.y()
+    )
+
+
+def node_grid_key(point):
+
+    return (
+        int(
+            math.floor(
+                point.x()
+                / CONNECT_TOLERANCE
+            )
+        ),
+        int(
+            math.floor(
+                point.y()
+                / CONNECT_TOLERANCE
+            )
+        )
+    )
+
+
+def get_or_create_node(
+    point
+):
+
+    global next_node_id
+
+    key = node_grid_key(
+        point
+    )
+
+
+    for dx in (-1, 0, 1):
+
+        for dy in (-1, 0, 1):
+
+            check_key = (
+                key[0] + dx,
+                key[1] + dy
+            )
+
+
+            for node_id in node_grid.get(
+                check_key,
+                []
+            ):
+
+                if (
+                    map_distance(
+                        point,
+                        nodes[node_id]
+                    )
+                    <= CONNECT_TOLERANCE
+                ):
+
+                    return node_id
+
+
+    node_id = next_node_id
+    next_node_id += 1
+
+
+    nodes[node_id] = QgsPointXY(
+        point
+    )
+
+
+    node_grid.setdefault(
+        key,
+        []
+    ).append(
+        node_id
+    )
+
+
+    return node_id
+
+
+def add_adj(
+    node_id,
+    edge_id
+):
+
+    adjacency.setdefault(
+        node_id,
+        []
+    ).append(
+        edge_id
+    )
+
+
+for item in pipe_features:
+
+    geom = item["geom"]
+
+
+    if geom.isMultipart():
+
+        parts = geom.asMultiPolyline()
+
+    else:
+
+        parts = [
+            geom.asPolyline()
+        ]
+
+
+    for part_number, part in enumerate(
+        parts
+    ):
+
+        if len(part) < 2:
+            continue
+
+
+        coords = [
+            QgsPointXY(p)
+            for p in part
+        ]
+
+
+        node1 = get_or_create_node(
+            coords[0]
+        )
+
+        node2 = get_or_create_node(
+            coords[-1]
+        )
+
+
+        length_m = coords_real_length(
+            coords
+        )
+
+
+        edge_id = len(
+            edges
+        )
+
+
+        edges.append(
+            {
+                "fid": item["fid"],
+                "part": part_number,
+                "n1": node1,
+                "n2": node2,
+                "coords": coords,
+                "length": length_m,
+                "name": item["name"]
+            }
+        )
+
+
+        edges_by_fid.setdefault(
+            item["fid"],
+            []
+        ).append(
+            edge_id
+        )
+
+
+        add_adj(
+            node1,
+            edge_id
+        )
+
+        add_adj(
+            node2,
+            edge_id
+        )
+
+
+print("")
+print("=" * 100)
+print("ГРАФ pipeline_1")
+print("=" * 100)
+
+print(
+    f"Рёбер: {len(edges)}"
+)
+
+print(
+    f"Узлов: {len(nodes)}"
+)
+
+
+# ============================================================
+# ПРОЕКЦИЯ ТОЧКИ НА РЕБРО
+# ============================================================
+
+def project_point_to_edge(
+    point,
+    edge
+):
+
+    coords = edge[
+        "coords"
+    ]
+
+    accumulated = 0.0
+
+    best = None
+    best_map_sq = None
+
+
+    for i in range(
+        len(coords) - 1
+    ):
+
+        p1 = coords[i]
+        p2 = coords[i + 1]
+
+
+        dx = (
+            p2.x()
+            - p1.x()
+        )
+
+        dy = (
+            p2.y()
+            - p1.y()
+        )
+
+
+        map_sq = (
+            dx * dx
+            + dy * dy
+        )
+
+
+        if map_sq == 0:
+            continue
+
+
+        vx = (
+            point.x()
+            - p1.x()
+        )
+
+        vy = (
+            point.y()
+            - p1.y()
+        )
+
+
+        t = (
+            vx * dx
+            + vy * dy
+        ) / map_sq
+
+
+        t = max(
+            0.0,
+            min(1.0, t)
+        )
+
+
+        px = (
+            p1.x()
+            + t * dx
+        )
+
+        py = (
+            p1.y()
+            + t * dy
+        )
+
+
+        ddx = (
+            point.x()
+            - px
+        )
+
+        ddy = (
+            point.y()
+            - py
+        )
+
+
+        dist_sq = (
+            ddx * ddx
+            + ddy * ddy
+        )
+
+
+        seg_real = real_distance(
+            p1,
+            p2
+        )
+
+
+        if (
+            best_map_sq is None
+            or
+            dist_sq < best_map_sq
+        ):
+
+            projection = QgsPointXY(
+                px,
+                py
+            )
+
+
+            best = {
+                "point": projection,
+                "chainage": (
+                    accumulated
+                    + seg_real * t
+                ),
+                "distance": real_distance(
+                    point,
+                    projection
+                )
+            }
+
+            best_map_sq = dist_sq
+
+
+        accumulated += seg_real
+
+
+    return best
+
+
+# ============================================================
+# ПРИВЯЗЫВАЕМ ЛОКАЛЬНЫЙ FID
+# К КОНКРЕТНОЙ ЧАСТИ ГРАФА
+# ============================================================
+
+def anchor_to_graph(
+    point,
+    anchor
+):
+
+    if anchor is None:
+        return None
+
+
+    edge_ids = edges_by_fid.get(
+        anchor["fid"],
+        []
+    )
+
+
+    best = None
+
+
+    for edge_id in edge_ids:
+
+        projection = project_point_to_edge(
+            point,
+            edges[edge_id]
+        )
+
+
+        if projection is None:
+            continue
+
+
+        if (
+            best is None
+            or
+            projection["distance"]
+            <
+            best["projection"]["distance"]
+        ):
+
+            best = {
+                "edge_id": edge_id,
+                "projection": projection
+            }
+
+
+    return best
+
+
+for cp in control_points:
+
+    cp["graph_anchor"] = (
+        anchor_to_graph(
+            cp["point"],
+            cp["anchor"]
+        )
+    )
+
+
+# ============================================================
+# DIJKSTRA
+#
+# ВАЖНО:
+# начало и конец соединяются только через
+# существующие узлы графа.
+# Через разрыв перепрыгивания нет.
+# ============================================================
+
+def dijkstra(
+    start_node,
+    forbidden_edges=None
+):
+
+    if forbidden_edges is None:
+
+        forbidden_edges = set()
+
+
+    distances = {
+        start_node: 0.0
+    }
+
+    previous = {}
+
+    heap = [
+        (
+            0.0,
+            start_node
+        )
     ]
 
 
-    best_name_matches.sort(
-        key=lambda x: x["distance"]
+    while heap:
+
+        current_distance, node = (
+            heapq.heappop(
+                heap
+            )
+        )
+
+
+        if (
+            current_distance
+            != distances.get(node)
+        ):
+
+            continue
+
+
+        for edge_id in adjacency.get(
+            node,
+            []
+        ):
+
+            if edge_id in forbidden_edges:
+                continue
+
+
+            edge = edges[
+                edge_id
+            ]
+
+
+            if edge["n1"] == node:
+
+                other = edge["n2"]
+
+            else:
+
+                other = edge["n1"]
+
+
+            new_distance = (
+                current_distance
+                + edge["length"]
+            )
+
+
+            if (
+                other not in distances
+                or
+                new_distance
+                <
+                distances[other]
+            ):
+
+                distances[
+                    other
+                ] = new_distance
+
+                previous[
+                    other
+                ] = (
+                    node,
+                    edge_id
+                )
+
+
+                heapq.heappush(
+                    heap,
+                    (
+                        new_distance,
+                        other
+                    )
+                )
+
+
+    return (
+        distances,
+        previous
     )
 
 
-    chosen = best_name_matches[0]
+# ============================================================
+# ВОССТАНОВЛЕНИЕ ПУТИ
+# ============================================================
 
-    selection_reason = (
-        "НАЙДЕНО СОВПАДЕНИЕ NAME — "
-        "выбрана линия с подходящим названием"
-    )
+def reconstruct_edges(
+    start_node,
+    end_node,
+    previous
+):
+
+    if start_node == end_node:
+
+        return []
 
 
-else:
+    current = end_node
+
+    result = []
+
+
+    while current != start_node:
+
+        if current not in previous:
+
+            return None
+
+
+        previous_node, edge_id = (
+            previous[current]
+        )
+
+
+        result.append(
+            edge_id
+        )
+
+        current = previous_node
+
+
+    result.reverse()
+
+    return result
+
+
+# ============================================================
+# ПУТЬ МЕЖДУ ДВУМЯ ПРОЕКЦИЯМИ
+#
+# Из четырёх вариантов концов выбираем
+# тот, который лучше соответствует
+# ожидаемой разнице километров.
+# ============================================================
+
+def path_between_anchors(
+    anchor_a,
+    anchor_b,
+    expected_distance
+):
+
+    edge_a_id = anchor_a[
+        "edge_id"
+    ]
+
+    edge_b_id = anchor_b[
+        "edge_id"
+    ]
+
+
+    edge_a = edges[
+        edge_a_id
+    ]
+
+    edge_b = edges[
+        edge_b_id
+    ]
+
+
+    projection_a = anchor_a[
+        "projection"
+    ]
+
+    projection_b = anchor_b[
+        "projection"
+    ]
+
 
     # --------------------------------------------------------
-    # СОВПАДЕНИЯ NAME НЕТ
-    #
-    # NULL не лучше OTHER.
-    # Просто берём геометрически ближайшую линию.
+    # ОБЕ ТОЧКИ НА ОДНОМ РЕБРЕ
     # --------------------------------------------------------
 
-    chosen = candidates[0]
+    if edge_a_id == edge_b_id:
 
-    selection_reason = (
-        "СОВПАДЕНИЯ NAME НЕТ — "
-        "выбрана ближайшая линия"
+        distance = abs(
+            projection_b[
+                "chainage"
+            ]
+            -
+            projection_a[
+                "chainage"
+            ]
+        )
+
+
+        return {
+            "distance": distance,
+            "edge_ids": {
+                edge_a_id
+            }
+        }
+
+
+    # --------------------------------------------------------
+    # РАССТОЯНИЕ ОТ ПРОЕКЦИИ ДО КОНЦОВ
+    # --------------------------------------------------------
+
+    options_a = [
+        (
+            edge_a["n1"],
+            projection_a[
+                "chainage"
+            ]
+        ),
+        (
+            edge_a["n2"],
+            edge_a["length"]
+            -
+            projection_a[
+                "chainage"
+            ]
+        )
+    ]
+
+
+    options_b = [
+        (
+            edge_b["n1"],
+            projection_b[
+                "chainage"
+            ]
+        ),
+        (
+            edge_b["n2"],
+            edge_b["length"]
+            -
+            projection_b[
+                "chainage"
+            ]
+        )
+    ]
+
+
+    candidates = []
+
+
+    for node_a, partial_a in options_a:
+
+        # Стартовое и конечное ребро
+        # нельзя повторно использовать в сетевом пути.
+        forbidden = {
+            edge_a_id,
+            edge_b_id
+        }
+
+
+        distances, previous = dijkstra(
+            node_a,
+            forbidden
+        )
+
+
+        for node_b, partial_b in options_b:
+
+            if node_b not in distances:
+                continue
+
+
+            total_distance = (
+                partial_a
+                + distances[node_b]
+                + partial_b
+            )
+
+
+            path_edges = reconstruct_edges(
+                node_a,
+                node_b,
+                previous
+            )
+
+
+            if path_edges is None:
+                continue
+
+
+            all_edges = set(
+                path_edges
+            )
+
+            all_edges.add(
+                edge_a_id
+            )
+
+            all_edges.add(
+                edge_b_id
+            )
+
+
+            candidates.append(
+                {
+                    "distance": total_distance,
+                    "difference": abs(
+                        total_distance
+                        - expected_distance
+                    ),
+                    "edge_ids": all_edges
+                }
+            )
+
+
+    if not candidates:
+
+        return None
+
+
+    # Не просто кратчайший путь.
+    # Выбираем тот, чья длина лучше соответствует
+    # километровым отметкам.
+    candidates.sort(
+        key=lambda x:
+        x["difference"]
     )
+
+
+    return candidates[0]
+
+
+# ============================================================
+# БАЗОВЫЙ ЯКОРЬ ВЫБРАННОЙ ТОЧКИ
+# ============================================================
+
+selected_control = None
+
+
+for cp in control_points:
+
+    if (
+        cp["fid"]
+        == selected_feature.id()
+    ):
+
+        selected_control = cp
+        break
+
+
+if (
+    selected_control is None
+    or
+    selected_control[
+        "graph_anchor"
+    ] is None
+):
+
+    raise Exception(
+        "Не удалось определить "
+        "локальную линию выбранной точки."
+    )
+
+
+# ============================================================
+# СТРОИМ ЦЕПОЧКУ ОТ ВЫБРАННОЙ ТОЧКИ
+# К СОСЕДНИМ КОНТРОЛЬНЫМ ТОЧКАМ
+# ============================================================
+
+all_chain_edges = {
+    selected_control[
+        "graph_anchor"
+    ]["edge_id"]
+}
+
+
+results = []
+
+
+for cp in control_points:
+
+    if (
+        cp["fid"]
+        == selected_feature.id()
+    ):
+
+        continue
+
+
+    if cp["graph_anchor"] is None:
+
+        results.append(
+            {
+                "km": cp["km"],
+                "status": "NO_ANCHOR"
+            }
+        )
+
+        continue
+
+
+    expected_distance = abs(
+        cp["km"]
+        - selected_km
+    ) * 1000.0
+
+
+    result = path_between_anchors(
+        selected_control[
+            "graph_anchor"
+        ],
+        cp[
+            "graph_anchor"
+        ],
+        expected_distance
+    )
+
+
+    if result is None:
+
+        results.append(
+            {
+                "km": cp["km"],
+                "status": "NO_PATH",
+                "expected": expected_distance
+            }
+        )
+
+        continue
+
+
+    all_chain_edges.update(
+        result["edge_ids"]
+    )
+
+
+    results.append(
+        {
+            "km": cp["km"],
+            "status": "OK",
+            "expected": expected_distance,
+            "actual": result["distance"],
+            "difference": abs(
+                result["distance"]
+                - expected_distance
+            )
+        }
+    )
+
+
+# ============================================================
+# ПЕРЕВОД РЁБЕР В FID pipeline_1
+# ============================================================
+
+selected_pipe_fids = sorted(
+    set(
+        edges[edge_id]["fid"]
+        for edge_id
+        in all_chain_edges
+    )
+)
+
+
+# ============================================================
+# ВЫДЕЛЯЕМ ЦЕПОЧКУ
+# ============================================================
+
+pipes.removeSelection()
+
+pipes.selectByIds(
+    selected_pipe_fids
+)
+
+pipes.triggerRepaint()
 
 
 # ============================================================
@@ -446,106 +1516,122 @@ else:
 
 print("")
 print("=" * 100)
-print("ВЫБОР ЛОКАЛЬНОЙ ЛИНИИ")
+print("ПОСТРОЕНИЕ ЦЕПОЧКИ")
 print("=" * 100)
 
 print(
-    f"Точка:    {point_name}"
+    f"Выбранная точка: "
+    f"{selected_km} км "
+    f"{selected_route}"
+)
+
+print("")
+
+
+base_anchor = (
+    selected_control[
+        "anchor"
+    ]
 )
 
 print(
-    f"Маршрут:  {route_name}"
+    f"Базовый FID pipeline_1: "
+    f"{base_anchor['fid']}"
 )
 
 print(
-    f"Отметка:  {km_value} км"
+    f"Расстояние от точки: "
+    f"{base_anchor['distance'] / 1000:.3f} км"
 )
 
 print(
-    f"Радиус поиска: "
-    f"{SEARCH_RADIUS_M / 1000:.0f} км"
+    f"Способ выбора: "
+    f"{base_anchor['reason']}"
+)
+
+print(
+    f"name: "
+    f"{base_anchor['name'] if base_anchor['name'] else '<NULL>'}"
 )
 
 
 print("")
-print("КАНДИДАТЫ:")
+print(
+    "Проверка соседних километров:"
+)
+
 print("-" * 100)
 
 
-for number, item in enumerate(
-    candidates[:SHOW_TOP],
-    start=1
-):
+for item in results:
 
-    priority_text = (
-        "-"
-        if item["priority"] is None
-        else str(item["priority"])
+    if item["status"] == "NO_ANCHOR":
+
+        print(
+            f"{item['km']:10.3f} км | "
+            f"не удалось выбрать "
+            f"локальную линию"
+        )
+
+    elif item["status"] == "NO_PATH":
+
+        print(
+            f"{item['km']:10.3f} км | "
+            f"ОБРЫВ: "
+            f"связного пути нет | "
+            f"ожидалось "
+            f"{item['expected'] / 1000:.3f} км"
+        )
+
+    else:
+
+        print(
+            f"{item['km']:10.3f} км | "
+            f"ожидалось "
+            f"{item['expected'] / 1000:8.3f} км | "
+            f"по pipeline_1 "
+            f"{item['actual'] / 1000:8.3f} км | "
+            f"разница "
+            f"{item['difference']:8.1f} м"
+        )
+
+
+print("")
+print(
+    f"В найденную цепочку вошло "
+    f"объектов pipeline_1: "
+    f"{len(selected_pipe_fids)}"
+)
+
+print("")
+
+print(
+    "FID:"
+)
+
+print(
+    ", ".join(
+        str(fid)
+        for fid in selected_pipe_fids
     )
-
-
-    print(
-        f"{number:2d}. "
-        f"{item['distance'] / 1000:8.3f} км | "
-        f"{item['status']:5s} | "
-        f"priority={priority_text:>3s} | "
-        f"FID={item['fid']} | "
-        f"{item['display_name']}"
-    )
+)
 
 
 print("")
 print("=" * 100)
-print("ВЫБРАНО")
-print("=" * 100)
 
 print(
-    selection_reason
-)
-
-print("")
-
-print(
-    f"FID:        {chosen['fid']}"
+    "ТОЧКИ НЕ ПЕРЕМЕЩАЛИСЬ."
 )
 
 print(
-    f"Расстояние: "
-    f"{chosen['distance'] / 1000:.3f} км"
+    "В pipeline_1 выделена только "
+    "найденная связанная цепочка."
 )
 
 print(
-    f"Статус name: "
-    f"{chosen['status']}"
-)
-
-print(
-    f"name:       "
-    f"{chosen['display_name']}"
-)
-
-
-# ============================================================
-# ВЫДЕЛЯЕМ ТОЛЬКО ВЫБРАННЫЙ ОБЪЕКТ
-# ============================================================
-
-pipes.removeSelection()
-
-pipes.selectByIds(
-    [chosen["fid"]]
-)
-
-pipes.triggerRepaint()
-
-
-print("")
-print(
-    "Выбранный объект pipeline_1 "
-    "выделен на карте."
-)
-
-print(
-    "Точки НЕ перемещались."
+    "Если между объектами есть настоящий "
+    "разрыв, скрипт через него не переходит."
 )
 
 print("=" * 100)
