@@ -1,0 +1,446 @@
+from qgis.core import (
+    QgsProject,
+    QgsWkbTypes,
+    QgsMemoryProviderUtils,
+    QgsFeature,
+    QgsLineSymbol,
+    QgsFillSymbol,
+    QgsMarkerSymbol,
+    QgsSingleSymbolRenderer,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsPalLayerSettings,
+    QgsTextFormat,
+    QgsVectorLayerSimpleLabeling
+)
+from qgis.PyQt.QtGui import QColor
+
+
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
+
+ROOT_GROUP_NAME = "DXF — восстановленная структура"
+
+# Берём ТОЛЬКО эти CAD-слои.
+# Всё остальное скрипт игнорирует.
+CAD_LAYERS = [
+    "3. Заземление",
+    "4. Технологические трубопроводы",
+    "9. Резервуары",
+    "10. Подземные емкости",
+    "2. Покрытие песок газон щебень",
+    "3. Инженерные сети",
+    "5. Здания и сооружения",
+    "2. Покрытия асфальт бетон",
+    "Радиусы",
+]
+
+
+# Цвета по исходному NanoCAD.
+# Пока ставим те, которые уже понятны по твоему скриншоту.
+CAD_COLORS = {
+    "3. Заземление": QColor("#ffff00"),                  # жёлтый
+    "4. Технологические трубопроводы": QColor("#00ff00"),# зелёный
+    "5. Здания и сооружения": QColor("#00b8d4"),         # близко к цвету 132
+
+    "9. Резервуары": QColor("#ffffff"),
+    "10. Подземные емкости": QColor("#ffffff"),
+    "2. Покрытие песок газон щебень": QColor("#ffffff"),
+    "3. Инженерные сети": QColor("#ffffff"),
+    "2. Покрытия асфальт бетон": QColor("#ffffff"),
+    "Радиусы": QColor("#ffffff"),
+}
+
+
+# ============================================================
+# СЛУЖЕБНЫЕ ФУНКЦИИ
+# ============================================================
+
+def norm(value):
+    """Нормализация имени CAD-слоя."""
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split()).casefold()
+
+
+CAD_LAYER_MAP = {
+    norm(name): name
+    for name in CAD_LAYERS
+}
+
+
+def get_color(cad_layer):
+    return CAD_COLORS.get(cad_layer, QColor("#ffffff"))
+
+
+def line_style_from_linetype(value):
+    """
+    Простейшее соответствие типов линий DXF → QGIS.
+    Потом при необходимости расширим под реальные Linetype.
+    """
+    s = "" if value is None else str(value).strip().casefold()
+
+    if not s:
+        return "solid"
+
+    if "continuous" in s:
+        return "solid"
+
+    if "center" in s or "centre" in s or "осев" in s:
+        return "dash dot"
+
+    if "hidden" in s:
+        return "dash"
+
+    if "dashdot" in s or "dash dot" in s:
+        return "dash dot"
+
+    if "dashed" in s or "dash" in s:
+        return "dash"
+
+    if "dot" in s:
+        return "dot"
+
+    return "solid"
+
+
+def style_line_layer(layer, cad_layer):
+    """Стиль линейного слоя с учётом Linetype."""
+    color = get_color(cad_layer)
+
+    linetype_idx = layer.fields().indexFromName("Linetype")
+
+    if linetype_idx == -1:
+        symbol = QgsLineSymbol.createSimple({
+            "color": color.name(),
+            "width": "0.35",
+            "line_style": "solid"
+        })
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        return
+
+    values = list(layer.uniqueValues(linetype_idx))
+
+    categories = []
+
+    for value in values:
+        style = line_style_from_linetype(value)
+
+        symbol = QgsLineSymbol.createSimple({
+            "color": color.name(),
+            "width": "0.35",
+            "line_style": style
+        })
+
+        label = "NULL" if value is None else str(value)
+
+        categories.append(
+            QgsRendererCategory(
+                value,
+                symbol,
+                label
+            )
+        )
+
+    renderer = QgsCategorizedSymbolRenderer(
+        "Linetype",
+        categories
+    )
+
+    layer.setRenderer(renderer)
+
+
+def style_polygon_layer(layer, cad_layer):
+    """
+    Пока полигон:
+    прозрачная заливка + контур цвета CAD-слоя.
+
+    После просмотра чертежа отдельно настроим,
+    где нужна реальная заливка/штриховка.
+    """
+    color = get_color(cad_layer)
+
+    symbol = QgsFillSymbol.createSimple({
+        "color": "0,0,0,0",
+        "outline_color": color.name(),
+        "outline_width": "0.35"
+    })
+
+    layer.setRenderer(
+        QgsSingleSymbolRenderer(symbol)
+    )
+
+
+def style_text_layer(layer, cad_layer):
+    """
+    Точка сама не отображается.
+    Вместо неё показывается Text.
+    """
+    color = get_color(cad_layer)
+
+    # Скрываем сам точечный маркер
+    marker = QgsMarkerSymbol.createSimple({
+        "name": "circle",
+        "size": "0",
+        "color": "0,0,0,0",
+        "outline_color": "0,0,0,0"
+    })
+
+    layer.setRenderer(
+        QgsSingleSymbolRenderer(marker)
+    )
+
+    # Подписи
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "Text"
+    settings.enabled = True
+
+    # Подпись располагается непосредственно у точки
+    settings.placement = QgsPalLayerSettings.OverPoint
+
+    # Стараемся показывать все CAD-подписи,
+    # даже если они конфликтуют друг с другом
+    settings.displayAll = True
+
+    text_format = QgsTextFormat()
+    text_format.setColor(color)
+    text_format.setSize(8)
+
+    settings.setFormat(text_format)
+
+    layer.setLabeling(
+        QgsVectorLayerSimpleLabeling(settings)
+    )
+
+    layer.setLabelsEnabled(True)
+
+
+def make_memory_layer(source_layer, name):
+    """
+    Создание временного слоя с теми же:
+    - полями
+    - геометрией
+    - CRS
+    """
+    return QgsMemoryProviderUtils.createMemoryLayer(
+        name,
+        source_layer.fields(),
+        source_layer.wkbType(),
+        source_layer.crs()
+    )
+
+
+# ============================================================
+# ПОЛУЧАЕМ ВЫДЕЛЕННЫЕ ИСХОДНЫЕ СЛОИ
+# ============================================================
+
+source_layers = iface.layerTreeView().selectedLayers()
+
+if len(source_layers) != 3:
+    raise Exception(
+        "Нужно выделить ровно 3 исходных слоя DXF: "
+        "точки, линии и полигоны."
+    )
+
+
+# Проверяем наличие Layer
+for src in source_layers:
+    if src.fields().indexFromName("Layer") == -1:
+        raise Exception(
+            f'В слое "{src.name()}" нет поля Layer.'
+        )
+
+
+project = QgsProject.instance()
+root = project.layerTreeRoot()
+
+
+# ============================================================
+# ЕСЛИ СКРИПТ УЖЕ ЗАПУСКАЛСЯ — УДАЛЯЕМ СТАРЫЙ РЕЗУЛЬТАТ
+# ============================================================
+
+old_group = root.findGroup(ROOT_GROUP_NAME)
+
+if old_group is not None:
+    old_layer_ids = [
+        node.layerId()
+        for node in old_group.findLayers()
+    ]
+
+    for layer_id in old_layer_ids:
+        project.removeMapLayer(layer_id)
+
+    root.removeChildNode(old_group)
+
+
+# ============================================================
+# СОЗДАЁМ ГРУППЫ В ПОРЯДКЕ NANOCAD
+# ============================================================
+
+result_group = root.addGroup(ROOT_GROUP_NAME)
+
+cad_groups = {}
+
+for cad_layer in CAD_LAYERS:
+    cad_groups[cad_layer] = result_group.addGroup(cad_layer)
+
+
+# Здесь хранятся созданные временные слои
+outputs = {}
+
+
+# ============================================================
+# РАЗБОР ТРЁХ DXF-СЛОЁВ
+# ============================================================
+
+for src in source_layers:
+
+    geometry_type = QgsWkbTypes.geometryType(
+        src.wkbType()
+    )
+
+    if geometry_type == QgsWkbTypes.PointGeometry:
+        kind = "Подписи"
+
+    elif geometry_type == QgsWkbTypes.LineGeometry:
+        kind = "Линии"
+
+    elif geometry_type == QgsWkbTypes.PolygonGeometry:
+        kind = "Полигоны"
+
+    else:
+        print(
+            f"Пропущен неизвестный тип геометрии: {src.name()}"
+        )
+        continue
+
+
+    text_exists = (
+        src.fields().indexFromName("Text") != -1
+    )
+
+
+    for feature in src.getFeatures():
+
+        raw_cad_layer = feature["Layer"]
+
+        cad_layer = CAD_LAYER_MAP.get(
+            norm(raw_cad_layer)
+        )
+
+        # Не входит в наш список нужных CAD-слоёв
+        if cad_layer is None:
+            continue
+
+
+        # Для точечного слоя оставляем только реальный текст
+        if kind == "Подписи":
+
+            if not text_exists:
+                continue
+
+            text_value = feature["Text"]
+
+            if text_value is None:
+                continue
+
+            if str(text_value).strip() == "":
+                continue
+
+
+        key = (
+            cad_layer,
+            kind
+        )
+
+
+        # Создаём слой только тогда,
+        # когда реально встретился хотя бы один объект
+        if key not in outputs:
+
+            output = make_memory_layer(
+                src,
+                kind
+            )
+
+            project.addMapLayer(
+                output,
+                False
+            )
+
+            cad_groups[cad_layer].addLayer(
+                output
+            )
+
+            outputs[key] = output
+
+
+        output = outputs[key]
+
+        new_feature = QgsFeature(
+            output.fields()
+        )
+
+        new_feature.setGeometry(
+            feature.geometry()
+        )
+
+        new_feature.setAttributes(
+            feature.attributes()
+        )
+
+        output.dataProvider().addFeature(
+            new_feature
+        )
+
+
+# ============================================================
+# НАЗНАЧАЕМ СТИЛИ
+# ============================================================
+
+for (cad_layer, kind), layer in outputs.items():
+
+    layer.updateExtents()
+
+    if kind == "Линии":
+        style_line_layer(
+            layer,
+            cad_layer
+        )
+
+    elif kind == "Полигоны":
+        style_polygon_layer(
+            layer,
+            cad_layer
+        )
+
+    elif kind == "Подписи":
+        style_text_layer(
+            layer,
+            cad_layer
+        )
+
+    layer.triggerRepaint()
+
+
+# ============================================================
+# УДАЛЯЕМ ПУСТЫЕ ГРУППЫ
+# ============================================================
+
+for cad_layer in reversed(CAD_LAYERS):
+
+    group = cad_groups[cad_layer]
+
+    if len(group.children()) == 0:
+        result_group.removeChildNode(group)
+
+
+iface.mapCanvas().refresh()
+
+print("========================================")
+print("Готово.")
+print("Создана группа:", ROOT_GROUP_NAME)
+print("Создано слоёв:", len(outputs))
+print("Исходные DXF-слои не изменялись.")
+print("========================================")
