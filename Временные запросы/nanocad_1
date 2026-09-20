@@ -1,3 +1,7 @@
+from qgis.core import (
+    QgsProject,
+    QgsWkbTypes
+)
 from osgeo import ogr
 from collections import defaultdict
 import re
@@ -7,33 +11,79 @@ import re
 # НАСТРОЙКИ
 # ============================================================
 
-TARGET_LAYERS = [
-    ("3. Заземление", 1000),
-    ("4. Технологические трубопроводы", 1100),
-    ("9. Резервуары", 1200),
-    ("10. Подземные емкости", 1300),
-    ("2. Покрытие песок газон щебень", 1400),
-    ("3. Инженерные сети", 1500),
-    ("5. Здания и сооружения", 1600),
-    ("2. Покрытия асфальт бетон", 1700),
-    ("Радиусы", 1800),
-]
+GROUP_NAME = "CHECK — покрытия"
 
-TARGET_NAMES = {name: start for name, start in TARGET_LAYERS}
+TARGET_LAYERS = {
+    "2. Покрытие песок газон щебень",
+    "2. Покрытия асфальт бетон",
+}
 
 
 # ============================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ИСХОДНЫЕ QGIS-СЛОИ
+# ============================================================
+
+selected = iface.layerTreeView().selectedLayers()
+
+if len(selected) != 3:
+    raise Exception(
+        "Выдели ровно 3 исходных DXF-слоя: "
+        "точки, линии и полигоны."
+    )
+
+qgis_by_geom = {}
+
+for lyr in selected:
+
+    geom_type = QgsWkbTypes.geometryType(lyr.wkbType())
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        qgis_by_geom["POINT"] = lyr
+
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        qgis_by_geom["LINE"] = lyr
+
+    elif geom_type == QgsWkbTypes.PolygonGeometry:
+        qgis_by_geom["POLYGON"] = lyr
+
+
+if set(qgis_by_geom.keys()) != {"POINT", "LINE", "POLYGON"}:
+    raise Exception(
+        "Не удалось определить точечный, линейный "
+        "и полигональный исходные слои."
+    )
+
+
+# ============================================================
+# ПУТЬ К DXF
+# ============================================================
+
+any_layer = selected[0]
+
+path = (
+    any_layer
+    .dataProvider()
+    .dataSourceUri()
+    .split("|")[0]
+)
+
+ds = ogr.Open(path)
+
+if ds is None:
+    raise Exception("Не удалось открыть DXF через OGR.")
+
+ogr_layer = ds.GetLayerByName("entities")
+
+if ogr_layer is None:
+    ogr_layer = ds.GetLayer(0)
+
+
+# ============================================================
+# ФУНКЦИИ
 # ============================================================
 
 def get_param(style, name):
-    """
-    Получение параметра из OGR STYLE:
-    c:#00ffff
-    w:0.05g
-    f:"Arial"
-    s:1.8g
-    """
+
     if not style:
         return None
 
@@ -45,342 +95,260 @@ def get_param(style, name):
     if not m:
         return None
 
-    return m.group(1) if m.group(1) is not None else m.group(2)
+    return (
+        m.group(1)
+        if m.group(1) is not None
+        else m.group(2)
+    )
 
 
-def normalize_linetype(linetype, style):
-    """
-    Схлопываем технические варианты CAD-типа линии.
-    """
+def geom_group(f):
 
-    lt = str(linetype or "").strip().upper()
-
-    if "CENTER" in lt:
-        return "CENTER"
-
-    if "FENCELINE" in lt:
-        return "FENCELINE"
-
-    if "ACAD_ISO" in lt:
-        return "ACAD_ISO"
-
-    if "ОГРАЖД" in lt:
-        return "ОГРАЖДЕНИЕ"
-
-    if "DASH" in lt:
-        return "DASHED"
-
-    if "DOT" in lt:
-        return "DOTTED"
-
-    # Если в PEN есть pattern, но Linetype ничего полезного
-    # не сказал — оставляем общий PATTERN.
-    if style and 'p:"' in style:
-        return "PATTERN"
-
-    return "CONTINUOUS"
-
-
-def geometry_group(feature):
-    """
-    Нормализованный тип геометрии:
-    LINE / POLYGON / TEXT
-    """
-
-    subclass = str(feature.GetField("SubClasses") or "")
-    style = feature.GetStyleString() or ""
+    subclass = str(f.GetField("SubClasses") or "")
+    style = f.GetStyleString() or ""
 
     if (
         "AcDbText" in subclass
         or "AcDbMText" in subclass
         or style.startswith("LABEL(")
     ):
-        return "TEXT"
+        return "POINT"
 
     if "AcDbHatch" in subclass:
         return "POLYGON"
 
-    geom = feature.GetGeometryRef()
+    geom = f.GetGeometryRef()
 
     if geom is None:
-        return "OTHER"
+        return None
 
     name = geom.GetGeometryName().upper()
 
     if "POLYGON" in name:
         return "POLYGON"
 
-    if (
-        "LINE" in name
-        or "CURVE" in name
-        or name == "GEOMETRYCOLLECTION"
-    ):
+    if "LINE" in name or "CURVE" in name:
+        return "LINE"
+
+    if name == "GEOMETRYCOLLECTION":
         return "LINE"
 
     if name == "POINT":
         return "POINT"
 
-    return name
+    return None
 
 
-def normalized_style(feature):
-    """
-    Возвращает нормализованный ключ стиля.
-    Технические различия DXF здесь уже схлопываются.
-    """
+def style_key(f):
 
-    group = geometry_group(feature)
+    geom = geom_group(f)
+    style = f.GetStyleString() or ""
 
-    style = feature.GetStyleString() or ""
-    linetype = feature.GetField("Linetype")
-    text = feature.GetField("Text")
-
-    # --------------------------------------------------------
-    # ЛИНИИ
-    # --------------------------------------------------------
-
-    if group == "LINE":
-
-        color = get_param(style, "c") or "-"
-        width = get_param(style, "w") or "-"
-
-        family = normalize_linetype(
-            linetype,
-            style
-        )
-
-        # ВАЖНО:
-        # конкретную длину штрихов p:...
-        # намеренно НЕ включаем.
-        # Center 2 / Center 5 и разные масштабы
-        # превращаются в один стиль.
-
-        return (
-            "LINE",
-            color.lower(),
-            width,
-            family
-        )
-
-
-    # --------------------------------------------------------
-    # ТЕКСТ
-    # --------------------------------------------------------
-
-    if group == "TEXT":
-
-        color = get_param(style, "c") or "-"
-        font = get_param(style, "f") or "-"
-        size = get_param(style, "s") or "-"
-        width_factor = get_param(style, "w") or "-"
-
-        # НЕ включаем:
-        # t = сам текст
-        # a = угол поворота
-        # p = положение привязки
-        #
-        # Они не создают новый class_code.
-
-        return (
-            "TEXT",
-            color.lower(),
-            font,
-            size,
-            width_factor
-        )
-
-
-    # --------------------------------------------------------
-    # HATCH / POLYGON
-    # --------------------------------------------------------
-
-    if group == "POLYGON":
-
-        hatch = str(text or "SOLID").strip().upper()
-
-        fill_color = (
-            get_param(style, "fc")
-            or get_param(style, "c")
-            or "-"
-        )
-
-        # Масштаб s намеренно не включаем:
-        # AR-CONC scale 0.1 и 0.4
-        # → один нормализованный класс.
-
-        return (
-            "POLYGON",
-            hatch,
-            fill_color.lower()
-        )
-
-
-    # --------------------------------------------------------
-    # ПРОЧЕЕ
-    # --------------------------------------------------------
-
-    color = get_param(style, "c") or "-"
-
-    return (
-        group,
-        color.lower()
-    )
-
-
-def style_description(key):
-    """
-    Человекочитаемое описание нормализованного стиля.
-    """
-
-    geom = key[0]
-
-    if geom == "LINE":
-
-        _, color, width, family = key
-
-        return (
-            f"линия | цвет {color} | "
-            f"тип {family} | толщина {width}"
-        )
-
-    if geom == "TEXT":
-
-        _, color, font, size, width_factor = key
-
-        return (
-            f"подпись | цвет {color} | "
-            f"шрифт {font} | размер {size} | "
-            f"ширина {width_factor}"
-        )
+    color = (
+        get_param(style, "fc")
+        or get_param(style, "c")
+        or "-"
+    ).lower()
 
     if geom == "POLYGON":
 
-        _, hatch, color = key
+        hatch = str(
+            f.GetField("Text") or "SOLID"
+        ).strip().upper()
 
         return (
-            f"полигон | HATCH {hatch} | "
-            f"цвет {color}"
+            geom,
+            hatch,
+            color
         )
 
-    return " | ".join(str(v) for v in key)
+    if geom == "LINE":
+
+        lt = str(
+            f.GetField("Linetype") or "Continuous"
+        ).strip()
+
+        return (
+            geom,
+            lt,
+            color
+        )
+
+    if geom == "POINT":
+
+        text = str(
+            f.GetField("Text") or ""
+        ).strip()
+
+        return (
+            geom,
+            color
+        )
+
+    return None
+
+
+def nice_name(key):
+
+    geom = key[0]
+
+    if geom == "POLYGON":
+        _, hatch, color = key
+        return f"POLYGON — {hatch} — {color}"
+
+    if geom == "LINE":
+        _, linetype, color = key
+        return f"LINE — {linetype} — {color}"
+
+    if geom == "POINT":
+        _, color = key
+        return f"POINT — {color}"
+
+    return str(key)
+
+
+def sql_escape(value):
+    return str(value).replace("'", "''")
 
 
 # ============================================================
-# ОТКРЫТИЕ DXF
+# СОБИРАЕМ ENTITYHANDLE ПО СТИЛЯМ
 # ============================================================
 
-qgis_layer = iface.activeLayer()
-
-if qgis_layer is None:
-    raise Exception("Нет активного слоя.")
-
-path = (
-    qgis_layer
-    .dataProvider()
-    .dataSourceUri()
-    .split("|")[0]
+groups = defaultdict(
+    lambda: defaultdict(list)
 )
 
-ds = ogr.Open(path)
-
-if ds is None:
-    raise Exception("Не удалось открыть DXF.")
-
-layer = ds.GetLayerByName("entities")
-
-if layer is None:
-    layer = ds.GetLayer(0)
-
-
-# ============================================================
-# СБОР НОРМАЛИЗОВАННЫХ КЛАССОВ
-# ============================================================
-
-result = defaultdict(
-    lambda: defaultdict(
-        lambda: {
-            "count": 0,
-            "handles": []
-        }
-    )
-)
-
-for f in layer:
+for f in ogr_layer:
 
     cad_layer = f.GetField("Layer")
 
-    if cad_layer not in TARGET_NAMES:
+    if cad_layer not in TARGET_LAYERS:
         continue
 
-    key = normalized_style(f)
+    key = style_key(f)
 
-    result[cad_layer][key]["count"] += 1
+    if key is None:
+        continue
 
-    if len(result[cad_layer][key]["handles"]) < 3:
-        handle = f.GetField("EntityHandle")
+    handle = f.GetField("EntityHandle")
 
-        if handle:
-            result[cad_layer][key]["handles"].append(
-                str(handle)
-            )
+    if handle is None:
+        continue
+
+    groups[cad_layer][key].append(
+        str(handle)
+    )
 
 
 # ============================================================
-# ВЫВОД
+# ГРУППА В ПРОЕКТЕ
 # ============================================================
 
-for cad_layer, start_code in TARGET_LAYERS:
+project = QgsProject.instance()
+root = project.layerTreeRoot()
 
-    print("")
-    print("=" * 80)
+old_group = root.findGroup(GROUP_NAME)
+
+if old_group:
+
+    ids = [
+        n.layerId()
+        for n in old_group.findLayers()
+    ]
+
+    for layer_id in ids:
+        project.removeMapLayer(layer_id)
+
+    root.removeChildNode(old_group)
+
+
+main_group = root.addGroup(GROUP_NAME)
+
+
+# ============================================================
+# СОЗДАЁМ ФИЛЬТРОВАННЫЕ КЛОНЫ
+# ============================================================
+
+for cad_layer in [
+    "2. Покрытие песок газон щебень",
+    "2. Покрытия асфальт бетон",
+]:
+
+    cad_group = main_group.addGroup(cad_layer)
+
+    print("\n" + "=" * 70)
     print(cad_layer)
-    print("Диапазон:", f"{start_code}–{start_code + 99}")
-    print("=" * 80)
+    print("=" * 70)
 
-    classes = result.get(cad_layer, {})
+    items = groups.get(cad_layer, {})
 
-    if not classes:
-        print("ОБЪЕКТОВ НЕТ")
-        continue
+    for key, handles in sorted(
+        items.items(),
+        key=lambda x: str(x[0])
+    ):
 
-    # Сортируем:
-    # сначала линии, потом полигоны, потом текст.
-    priority = {
-        "LINE": 1,
-        "POLYGON": 2,
-        "TEXT": 3,
-        "POINT": 4,
-        "OTHER": 5,
-    }
+        geom = key[0]
 
-    sorted_classes = sorted(
-        classes.items(),
-        key=lambda item: (
-            priority.get(item[0][0], 99),
-            str(item[0])
+        src = qgis_by_geom.get(geom)
+
+        if src is None:
+            continue
+
+        clone = src.clone()
+
+        display_name = (
+            f"{nice_name(key)} "
+            f"[{len(handles)}]"
         )
-    )
 
-    code = start_code
+        clone.setName(display_name)
 
-    for key, info in sorted_classes:
+        handles_sql = ", ".join(
+            f"'{sql_escape(h)}'"
+            for h in handles
+        )
 
-        print("")
-        print("Кандидат class_code:", code)
-        print("Объектов:", info["count"])
-        print("Геометрия:", key[0])
-        print("Стиль:", style_description(key))
+        expression = (
+            f"\"EntityHandle\" IN "
+            f"({handles_sql})"
+        )
 
-        if info["handles"]:
+        if not clone.setSubsetString(expression):
             print(
-                "Примеры EntityHandle:",
-                ", ".join(info["handles"])
+                "НЕ УДАЛОСЬ:",
+                display_name
             )
+            continue
 
-        code += 1
+        project.addMapLayer(
+            clone,
+            False
+        )
 
-    print("")
-    print(
-        "НОРМАЛИЗОВАННЫХ КЛАССОВ:",
-        len(sorted_classes)
-    )
+        cad_group.addLayer(clone)
+
+        # По умолчанию выключаем,
+        # чтобы включать по одному
+        node = cad_group.findLayer(
+            clone.id()
+        )
+
+        if node:
+            node.setItemVisibilityChecked(False)
+
+        print(
+            display_name,
+            "| объектов:",
+            len(handles)
+        )
+
+
+main_group.setExpanded(True)
+
+print("\n====================================")
+print("ГОТОВО")
+print("Группа:", GROUP_NAME)
+print("Все диагностические слои выключены.")
+print("Включай их по одному и сравнивай с NanoCAD.")
+print("====================================")
