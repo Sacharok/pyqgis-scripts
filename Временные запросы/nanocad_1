@@ -1,354 +1,497 @@
 from qgis.core import (
     QgsProject,
-    QgsWkbTypes
+    QgsWkbTypes,
+    QgsField,
+    QgsExpression
 )
-from osgeo import ogr
-from collections import defaultdict
-import re
+
+# Совместимость QGIS 3 / QGIS 4
+try:
+    from qgis.PyQt.QtCore import QMetaType
+
+    TYPE_INT = QMetaType.Type.Int
+    TYPE_STRING = QMetaType.Type.QString
+
+except Exception:
+    from qgis.PyQt.QtCore import QVariant
+
+    TYPE_INT = QVariant.Int
+    TYPE_STRING = QVariant.String
 
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
 
-GROUP_NAME = "CHECK — покрытия"
+ROOT_GROUP_NAME = "NORMALIZED — Geoportal"
 
-TARGET_LAYERS = {
-    "2. Покрытие песок газон щебень",
-    "2. Покрытия асфальт бетон",
-}
+CLASSES = [
+    (
+        "3. Заземление",
+        1000,
+        "Заземление"
+    ),
+    (
+        "4. Технологические трубопроводы",
+        1100,
+        "Технологические трубопроводы"
+    ),
+    (
+        "9. Резервуары",
+        1200,
+        "Резервуары"
+    ),
+    (
+        "10. Подземные емкости",
+        1300,
+        "Подземные емкости"
+    ),
+    (
+        "2. Покрытие песок газон щебень",
+        1400,
+        "Покрытие песок, газон, щебень"
+    ),
+    (
+        "3. Инженерные сети",
+        1500,
+        "Инженерные сети"
+    ),
+    (
+        "5. Здания и сооружения",
+        1600,
+        "Здания и сооружения"
+    ),
+    (
+        "2. Покрытия асфальт бетон",
+        1700,
+        "Покрытия асфальт, бетон"
+    ),
+    (
+        "Радиусы",
+        1800,
+        "Радиусы"
+    ),
+]
 
 
 # ============================================================
-# ИСХОДНЫЕ QGIS-СЛОИ
+# ИСХОДНЫЕ СЛОИ
 # ============================================================
 
 selected = iface.layerTreeView().selectedLayers()
 
 if len(selected) != 3:
     raise Exception(
-        "Выдели ровно 3 исходных DXF-слоя: "
+        "Нужно выделить ровно 3 исходных DXF-слоя: "
         "точки, линии и полигоны."
     )
 
-qgis_by_geom = {}
+
+point_src = None
+line_src = None
+polygon_src = None
+
 
 for lyr in selected:
 
-    geom_type = QgsWkbTypes.geometryType(lyr.wkbType())
+    if lyr.fields().indexFromName("Layer") == -1:
+        raise Exception(
+            f'В слое "{lyr.name()}" нет поля Layer. '
+            f'Похоже, выбран не исходный DXF-слой.'
+        )
+
+    geom_type = QgsWkbTypes.geometryType(
+        lyr.wkbType()
+    )
 
     if geom_type == QgsWkbTypes.PointGeometry:
-        qgis_by_geom["POINT"] = lyr
+        point_src = lyr
 
     elif geom_type == QgsWkbTypes.LineGeometry:
-        qgis_by_geom["LINE"] = lyr
+        line_src = lyr
 
     elif geom_type == QgsWkbTypes.PolygonGeometry:
-        qgis_by_geom["POLYGON"] = lyr
+        polygon_src = lyr
 
 
-if set(qgis_by_geom.keys()) != {"POINT", "LINE", "POLYGON"}:
+if point_src is None:
     raise Exception(
-        "Не удалось определить точечный, линейный "
-        "и полигональный исходные слои."
+        "Не найден точечный исходный DXF-слой."
+    )
+
+if line_src is None:
+    raise Exception(
+        "Не найден линейный исходный DXF-слой."
+    )
+
+if polygon_src is None:
+    raise Exception(
+        "Не найден полигональный исходный DXF-слой."
     )
 
 
+print("Исходные слои:")
+print("Точки:", point_src.name())
+print("Линии:", line_src.name())
+print("Полигоны:", polygon_src.name())
+
+
 # ============================================================
-# ПУТЬ К DXF
+# ПРОЕКТ
 # ============================================================
 
-any_layer = selected[0]
+project = QgsProject.instance()
+root = project.layerTreeRoot()
 
-path = (
-    any_layer
-    .dataProvider()
-    .dataSourceUri()
-    .split("|")[0]
+
+# Удаляем результат предыдущего запуска
+old_group = root.findGroup(
+    ROOT_GROUP_NAME
 )
 
-ds = ogr.Open(path)
+if old_group is not None:
 
-if ds is None:
-    raise Exception("Не удалось открыть DXF через OGR.")
+    old_layer_ids = [
+        node.layerId()
+        for node in old_group.findLayers()
+    ]
 
-ogr_layer = ds.GetLayerByName("entities")
+    for layer_id in old_layer_ids:
+        project.removeMapLayer(
+            layer_id
+        )
 
-if ogr_layer is None:
-    ogr_layer = ds.GetLayer(0)
+    root.removeChildNode(
+        old_group
+    )
+
+
+main_group = root.addGroup(
+    ROOT_GROUP_NAME
+)
 
 
 # ============================================================
 # ФУНКЦИИ
 # ============================================================
 
-def get_param(style, name):
-
-    if not style:
-        return None
-
-    m = re.search(
-        rf'(?:^|[,(]){re.escape(name)}:(?:"([^"]*)"|([^,\)]+))',
-        style
-    )
-
-    if not m:
-        return None
-
-    return (
-        m.group(1)
-        if m.group(1) is not None
-        else m.group(2)
+def escape_sql(value):
+    return str(value).replace(
+        "'",
+        "''"
     )
 
 
-def geom_group(f):
-
-    subclass = str(f.GetField("SubClasses") or "")
-    style = f.GetStyleString() or ""
-
-    if (
-        "AcDbText" in subclass
-        or "AcDbMText" in subclass
-        or style.startswith("LABEL(")
-    ):
-        return "POINT"
-
-    if "AcDbHatch" in subclass:
-        return "POLYGON"
-
-    geom = f.GetGeometryRef()
-
-    if geom is None:
-        return None
-
-    name = geom.GetGeometryName().upper()
-
-    if "POLYGON" in name:
-        return "POLYGON"
-
-    if "LINE" in name or "CURVE" in name:
-        return "LINE"
-
-    if name == "GEOMETRYCOLLECTION":
-        return "LINE"
-
-    if name == "POINT":
-        return "POINT"
-
-    return None
-
-
-def style_key(f):
-
-    geom = geom_group(f)
-    style = f.GetStyleString() or ""
-
-    color = (
-        get_param(style, "fc")
-        or get_param(style, "c")
-        or "-"
-    ).lower()
-
-    if geom == "POLYGON":
-
-        hatch = str(
-            f.GetField("Text") or "SOLID"
-        ).strip().upper()
-
-        return (
-            geom,
-            hatch,
-            color
-        )
-
-    if geom == "LINE":
-
-        lt = str(
-            f.GetField("Linetype") or "Continuous"
-        ).strip()
-
-        return (
-            geom,
-            lt,
-            color
-        )
-
-    if geom == "POINT":
-
-        text = str(
-            f.GetField("Text") or ""
-        ).strip()
-
-        return (
-            geom,
-            color
-        )
-
-    return None
-
-
-def nice_name(key):
-
-    geom = key[0]
-
-    if geom == "POLYGON":
-        _, hatch, color = key
-        return f"POLYGON — {hatch} — {color}"
-
-    if geom == "LINE":
-        _, linetype, color = key
-        return f"LINE — {linetype} — {color}"
-
-    if geom == "POINT":
-        _, color = key
-        return f"POINT — {color}"
-
-    return str(key)
-
-
-def sql_escape(value):
-    return str(value).replace("'", "''")
-
-
-# ============================================================
-# СОБИРАЕМ ENTITYHANDLE ПО СТИЛЯМ
-# ============================================================
-
-groups = defaultdict(
-    lambda: defaultdict(list)
-)
-
-for f in ogr_layer:
-
-    cad_layer = f.GetField("Layer")
-
-    if cad_layer not in TARGET_LAYERS:
-        continue
-
-    key = style_key(f)
-
-    if key is None:
-        continue
-
-    handle = f.GetField("EntityHandle")
-
-    if handle is None:
-        continue
-
-    groups[cad_layer][key].append(
-        str(handle)
-    )
-
-
-# ============================================================
-# ГРУППА В ПРОЕКТЕ
-# ============================================================
-
-project = QgsProject.instance()
-root = project.layerTreeRoot()
-
-old_group = root.findGroup(GROUP_NAME)
-
-if old_group:
-
-    ids = [
-        n.layerId()
-        for n in old_group.findLayers()
-    ]
-
-    for layer_id in ids:
-        project.removeMapLayer(layer_id)
-
-    root.removeChildNode(old_group)
-
-
-main_group = root.addGroup(GROUP_NAME)
-
-
-# ============================================================
-# СОЗДАЁМ ФИЛЬТРОВАННЫЕ КЛОНЫ
-# ============================================================
-
-for cad_layer in [
-    "2. Покрытие песок газон щебень",
-    "2. Покрытия асфальт бетон",
-]:
-
-    cad_group = main_group.addGroup(cad_layer)
-
-    print("\n" + "=" * 70)
-    print(cad_layer)
-    print("=" * 70)
-
-    items = groups.get(cad_layer, {})
-
-    for key, handles in sorted(
-        items.items(),
-        key=lambda x: str(x[0])
-    ):
-
-        geom = key[0]
-
-        src = qgis_by_geom.get(geom)
-
-        if src is None:
-            continue
-
-        clone = src.clone()
-
-        display_name = (
-            f"{nice_name(key)} "
-            f"[{len(handles)}]"
-        )
-
-        clone.setName(display_name)
-
-        handles_sql = ", ".join(
-            f"'{sql_escape(h)}'"
-            for h in handles
-        )
-
-        expression = (
-            f"\"EntityHandle\" IN "
-            f"({handles_sql})"
-        )
-
-        if not clone.setSubsetString(expression):
-            print(
-                "НЕ УДАЛОСЬ:",
-                display_name
+def layer_has_features(layer):
+    iterator = layer.getFeatures()
+
+    try:
+        next(iterator)
+        return True
+
+    except StopIteration:
+        return False
+
+
+def add_class_fields(
+    layer,
+    class_code,
+    class_name
+):
+    """
+    Пока создаём ВИРТУАЛЬНЫЕ поля.
+    DXF физически не изменяется.
+
+    При окончательной выгрузке в GeoPackage
+    мы материализуем их как обычные поля.
+    """
+
+    if layer.fields().indexFromName(
+        "class_code"
+    ) == -1:
+
+        layer.addExpressionField(
+            str(class_code),
+            QgsField(
+                "class_code",
+                TYPE_INT
             )
-            continue
+        )
+
+    if layer.fields().indexFromName(
+        "class_name"
+    ) == -1:
+
+        expression = QgsExpression.quotedString(
+            class_name
+        )
+
+        layer.addExpressionField(
+            expression,
+            QgsField(
+                "class_name",
+                TYPE_STRING,
+                len=150
+            )
+        )
+
+
+def make_clone(
+    source,
+    cad_layer,
+    class_code,
+    class_name,
+    display_name,
+    text_only=False
+):
+
+    clone = source.clone()
+
+    clone.setName(
+        display_name
+    )
+
+    cad_layer_sql = escape_sql(
+        cad_layer
+    )
+
+    filter_sql = (
+        f"\"Layer\" = "
+        f"'{cad_layer_sql}'"
+    )
+
+    # В точечном слое оставляем только подписи,
+    # как мы договорились ранее.
+    if text_only:
+
+        if clone.fields().indexFromName(
+            "Text"
+        ) == -1:
+            return None
+
+        filter_sql += (
+            ' AND "Text" IS NOT NULL'
+            ' AND "Text" <> \'\''
+        )
+
+    ok = clone.setSubsetString(
+        filter_sql
+    )
+
+    if not ok:
+        print(
+            "Не удалось применить фильтр:",
+            cad_layer,
+            display_name
+        )
+        return None
+
+    if not layer_has_features(
+        clone
+    ):
+        return None
+
+    add_class_fields(
+        clone,
+        class_code,
+        class_name
+    )
+
+    return clone
+
+
+# ============================================================
+# СОЗДАЁМ НОРМАЛИЗОВАННУЮ СТРУКТУРУ
+# ============================================================
+
+created_layers = []
+
+
+for (
+    cad_layer,
+    class_code,
+    class_name
+) in CLASSES:
+
+    thematic_group = main_group.addGroup(
+        f"{class_code} — {class_name}"
+    )
+
+
+    # --------------------------------------------------------
+    # ПОЛИГОНЫ
+    # --------------------------------------------------------
+
+    poly = make_clone(
+        polygon_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Полигоны"
+    )
+
+    if poly is not None:
 
         project.addMapLayer(
-            clone,
+            poly,
             False
         )
 
-        cad_group.addLayer(clone)
-
-        # По умолчанию выключаем,
-        # чтобы включать по одному
-        node = cad_group.findLayer(
-            clone.id()
+        thematic_group.addLayer(
+            poly
         )
 
-        if node:
-            node.setItemVisibilityChecked(False)
-
-        print(
-            display_name,
-            "| объектов:",
-            len(handles)
+        created_layers.append(
+            poly
         )
 
+
+    # --------------------------------------------------------
+    # ЛИНИИ
+    # --------------------------------------------------------
+
+    line = make_clone(
+        line_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Линии"
+    )
+
+    if line is not None:
+
+        project.addMapLayer(
+            line,
+            False
+        )
+
+        thematic_group.addLayer(
+            line
+        )
+
+        created_layers.append(
+            line
+        )
+
+
+    # --------------------------------------------------------
+    # ПОДПИСИ
+    # --------------------------------------------------------
+
+    text = make_clone(
+        point_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Подписи",
+        text_only=True
+    )
+
+    if text is not None:
+
+        project.addMapLayer(
+            text,
+            False
+        )
+
+        thematic_group.addLayer(
+            text
+        )
+
+        created_layers.append(
+            text
+        )
+
+
+    # Если в тематике вообще ничего нет,
+    # пустую группу удаляем.
+    if len(
+        thematic_group.children()
+    ) == 0:
+
+        main_group.removeChildNode(
+            thematic_group
+        )
+
+
+# ============================================================
+# СКРЫВАЕМ ТРИ ИСХОДНЫХ DXF-СЛОЯ
+# ============================================================
+
+for lyr in selected:
+
+    node = root.findLayer(
+        lyr.id()
+    )
+
+    if node is not None:
+        node.setItemVisibilityChecked(
+            False
+        )
+
+
+# ============================================================
+# ОФОРМЛЕНИЕ ДЕРЕВА
+# ============================================================
 
 main_group.setExpanded(True)
 
-print("\n====================================")
-print("ГОТОВО")
-print("Группа:", GROUP_NAME)
-print("Все диагностические слои выключены.")
-print("Включай их по одному и сравнивай с NanoCAD.")
-print("====================================")
+for child in main_group.children():
+
+    if hasattr(
+        child,
+        "setExpanded"
+    ):
+        child.setExpanded(
+            False
+        )
+
+
+iface.mapCanvas().refresh()
+
+
+# ============================================================
+# ОТЧЁТ
+# ============================================================
+
+print("")
+print("=" * 70)
+print("НОРМАЛИЗАЦИЯ СОЗДАНА")
+print("=" * 70)
+
+for (
+    cad_layer,
+    class_code,
+    class_name
+) in CLASSES:
+
+    print(
+        class_code,
+        "—",
+        class_name
+    )
+
+print("")
+print(
+    "Создано QGIS-слоёв:",
+    len(created_layers)
+)
+
+print("")
+print(
+    "Исходная геометрия НЕ изменялась."
+)
+
+print(
+    "Исходный CAD-стиль сохранён."
+)
+
+print(
+    "class_code и class_name добавлены."
+)
+
+print(
+    "Пустые точечные объекты не перенесены."
+)
+
+print("=" * 70)
