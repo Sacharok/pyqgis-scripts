@@ -1,0 +1,690 @@
+from qgis.core import (
+    QgsProject,
+    QgsWkbTypes,
+    QgsFields,
+    QgsField,
+    QgsFeature,
+    QgsMemoryProviderUtils,
+    QgsVectorFileWriter,
+    QgsVectorLayer
+)
+
+from qgis.PyQt.QtWidgets import QFileDialog
+
+import os
+
+
+# ============================================================
+# СОВМЕСТИМОСТЬ QGIS 3 / QGIS 4
+# ============================================================
+
+try:
+    from qgis.PyQt.QtCore import QMetaType
+
+    TYPE_INT = QMetaType.Type.Int
+    TYPE_STRING = QMetaType.Type.QString
+
+except Exception:
+    from qgis.PyQt.QtCore import QVariant
+
+    TYPE_INT = QVariant.Int
+    TYPE_STRING = QVariant.String
+
+
+# ============================================================
+# КЛАССИФИКАТОР
+# ============================================================
+
+CLASS_MAP = {
+
+    "3. Заземление":
+        (1000, "Заземление"),
+
+    "4. Технологические трубопроводы":
+        (1100, "Технологические трубопроводы"),
+
+    "9. Резервуары":
+        (1200, "Резервуары"),
+
+    "10. Подземные емкости":
+        (1300, "Подземные емкости"),
+
+    "2. Покрытие песок газон щебень":
+        (1400, "Покрытие песок, газон, щебень"),
+
+    "3. Инженерные сети":
+        (1500, "Инженерные сети"),
+
+    "5. Здания и сооружения":
+        (1600, "Здания и сооружения"),
+
+    "2. Покрытия асфальт бетон":
+        (1700, "Покрытия асфальт, бетон"),
+
+    "Радиусы":
+        (1800, "Радиусы"),
+}
+
+
+# ============================================================
+# НОРМАЛИЗАЦИЯ НАЗВАНИЯ CAD-СЛОЯ
+# ============================================================
+
+def norm(value):
+
+    if value is None:
+        return ""
+
+    return " ".join(
+        str(value).strip().split()
+    ).casefold()
+
+
+CLASS_MAP_NORM = {
+    norm(layer_name): value
+    for layer_name, value in CLASS_MAP.items()
+}
+
+
+# ============================================================
+# ВЫБИРАЕМ ПАПКУ ДЛЯ SHP
+# ============================================================
+
+output_dir = QFileDialog.getExistingDirectory(
+    iface.mainWindow(),
+    "Выберите папку для SHP"
+)
+
+if not output_dir:
+    raise Exception("Папка не выбрана. Выполнение отменено.")
+
+
+print("Папка:", output_dir)
+
+
+# ============================================================
+# ИСХОДНЫЕ DXF-СЛОИ
+# ============================================================
+
+selected = iface.layerTreeView().selectedLayers()
+
+if len(selected) != 3:
+    raise Exception(
+        "Нужно выделить ровно 3 исходных DXF-слоя: "
+        "точки, линии и полигоны."
+    )
+
+
+point_src = None
+line_src = None
+polygon_src = None
+
+
+for layer in selected:
+
+    if layer.fields().indexFromName("Layer") == -1:
+        raise Exception(
+            f'В слое "{layer.name()}" нет поля Layer. '
+            f'Нужно выделить исходные DXF-слои.'
+        )
+
+    geom_type = QgsWkbTypes.geometryType(
+        layer.wkbType()
+    )
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        point_src = layer
+
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        line_src = layer
+
+    elif geom_type == QgsWkbTypes.PolygonGeometry:
+        polygon_src = layer
+
+
+if point_src is None:
+    raise Exception("Не найден точечный DXF-слой.")
+
+if line_src is None:
+    raise Exception("Не найден линейный DXF-слой.")
+
+if polygon_src is None:
+    raise Exception("Не найден полигональный DXF-слой.")
+
+
+print("Точки:", point_src.name())
+print("Линии:", line_src.name())
+print("Полигоны:", polygon_src.name())
+
+
+# ============================================================
+# ПОЛЯ ИТОГОВЫХ SHP
+# ============================================================
+
+common_fields = QgsFields()
+
+common_fields.append(
+    QgsField(
+        "class_code",
+        TYPE_INT
+    )
+)
+
+common_fields.append(
+    QgsField(
+        "class_name",
+        TYPE_STRING,
+        len=150
+    )
+)
+
+
+text_fields = QgsFields()
+
+text_fields.append(
+    QgsField(
+        "class_code",
+        TYPE_INT
+    )
+)
+
+text_fields.append(
+    QgsField(
+        "class_name",
+        TYPE_STRING,
+        len=150
+    )
+)
+
+# У SHP/DBF строковое поле лучше держать <= 254 символов
+text_fields.append(
+    QgsField(
+        "text",
+        TYPE_STRING,
+        len=254
+    )
+)
+
+
+# ============================================================
+# ВРЕМЕННЫЕ ЧИСТЫЕ СЛОИ
+# ============================================================
+
+line_out = QgsMemoryProviderUtils.createMemoryLayer(
+    "objects_line",
+    common_fields,
+    line_src.wkbType(),
+    line_src.crs()
+)
+
+
+polygon_out = QgsMemoryProviderUtils.createMemoryLayer(
+    "objects_polygon",
+    common_fields,
+    polygon_src.wkbType(),
+    polygon_src.crs()
+)
+
+
+text_out = QgsMemoryProviderUtils.createMemoryLayer(
+    "objects_text",
+    text_fields,
+    point_src.wkbType(),
+    point_src.crs()
+)
+
+
+# ============================================================
+# СТАТИСТИКА
+# ============================================================
+
+stats = {}
+
+for class_code, class_name in CLASS_MAP.values():
+
+    stats[class_code] = {
+        "name": class_name,
+        "line": 0,
+        "polygon": 0,
+        "text": 0
+    }
+
+
+# ============================================================
+# ЛИНИИ
+# ============================================================
+
+line_features = []
+
+for src_feature in line_src.getFeatures():
+
+    cad_layer = norm(
+        src_feature["Layer"]
+    )
+
+    cls = CLASS_MAP_NORM.get(
+        cad_layer
+    )
+
+    if cls is None:
+        continue
+
+    class_code, class_name = cls
+
+    new_feature = QgsFeature(
+        line_out.fields()
+    )
+
+    new_feature.setGeometry(
+        src_feature.geometry()
+    )
+
+    new_feature.setAttributes([
+        class_code,
+        class_name
+    ])
+
+    line_features.append(
+        new_feature
+    )
+
+    stats[class_code]["line"] += 1
+
+
+line_out.dataProvider().addFeatures(
+    line_features
+)
+
+line_out.updateExtents()
+
+
+# ============================================================
+# ПОЛИГОНЫ
+# ============================================================
+
+polygon_features = []
+
+for src_feature in polygon_src.getFeatures():
+
+    cad_layer = norm(
+        src_feature["Layer"]
+    )
+
+    cls = CLASS_MAP_NORM.get(
+        cad_layer
+    )
+
+    if cls is None:
+        continue
+
+    class_code, class_name = cls
+
+    new_feature = QgsFeature(
+        polygon_out.fields()
+    )
+
+    new_feature.setGeometry(
+        src_feature.geometry()
+    )
+
+    new_feature.setAttributes([
+        class_code,
+        class_name
+    ])
+
+    polygon_features.append(
+        new_feature
+    )
+
+    stats[class_code]["polygon"] += 1
+
+
+polygon_out.dataProvider().addFeatures(
+    polygon_features
+)
+
+polygon_out.updateExtents()
+
+
+# ============================================================
+# ТЕКСТОВЫЙ / ТОЧЕЧНЫЙ СЛОЙ
+# ============================================================
+
+if point_src.fields().indexFromName("Text") == -1:
+    raise Exception(
+        "В исходном точечном слое отсутствует поле Text."
+    )
+
+
+text_features = []
+
+for src_feature in point_src.getFeatures():
+
+    cad_layer = norm(
+        src_feature["Layer"]
+    )
+
+    cls = CLASS_MAP_NORM.get(
+        cad_layer
+    )
+
+    if cls is None:
+        continue
+
+    text_value = src_feature["Text"]
+
+    # Пустые точки сразу выбрасываем
+    if text_value is None:
+        continue
+
+    text_value = str(
+        text_value
+    ).strip()
+
+    if not text_value:
+        continue
+
+    class_code, class_name = cls
+
+    new_feature = QgsFeature(
+        text_out.fields()
+    )
+
+    new_feature.setGeometry(
+        src_feature.geometry()
+    )
+
+    new_feature.setAttributes([
+        class_code,
+        class_name,
+        text_value
+    ])
+
+    text_features.append(
+        new_feature
+    )
+
+    stats[class_code]["text"] += 1
+
+
+text_out.dataProvider().addFeatures(
+    text_features
+)
+
+text_out.updateExtents()
+
+
+# ============================================================
+# ПУТИ К SHP
+# ============================================================
+
+line_path = os.path.join(
+    output_dir,
+    "objects_line.shp"
+)
+
+polygon_path = os.path.join(
+    output_dir,
+    "objects_polygon.shp"
+)
+
+text_path = os.path.join(
+    output_dir,
+    "objects_text.shp"
+)
+
+
+# ============================================================
+# УДАЛЕНИЕ СТАРЫХ SHP, ЕСЛИ УЖЕ ЕСТЬ
+# ============================================================
+
+for shp_path in [
+    line_path,
+    polygon_path,
+    text_path
+]:
+
+    if os.path.exists(shp_path):
+
+        QgsVectorFileWriter.deleteShapeFile(
+            shp_path
+        )
+
+
+# ============================================================
+# ФУНКЦИЯ СОХРАНЕНИЯ SHP
+# ============================================================
+
+transform_context = QgsProject.instance().transformContext()
+
+
+def save_shp(layer, shp_path):
+
+    options = QgsVectorFileWriter.SaveVectorOptions()
+
+    options.driverName = "ESRI Shapefile"
+
+    # Кириллица
+    options.fileEncoding = "UTF-8"
+
+    options.actionOnExistingFile = (
+        QgsVectorFileWriter.CreateOrOverwriteFile
+    )
+
+    result = QgsVectorFileWriter.writeAsVectorFormatV3(
+        layer,
+        shp_path,
+        transform_context,
+        options
+    )
+
+    error_code = result[0]
+
+    if error_code != QgsVectorFileWriter.NoError:
+
+        raise Exception(
+            f"Ошибка записи {shp_path}\n"
+            f"{result}"
+        )
+
+
+# ============================================================
+# СОХРАНЯЕМ
+# ============================================================
+
+save_shp(
+    line_out,
+    line_path
+)
+
+save_shp(
+    polygon_out,
+    polygon_path
+)
+
+save_shp(
+    text_out,
+    text_path
+)
+
+
+# ============================================================
+# ДОБАВЛЯЕМ SHP В ПРОЕКТ
+# ============================================================
+
+project = QgsProject.instance()
+root = project.layerTreeRoot()
+
+GROUP_NAME = "ГОТОВО — SHP для геопортала"
+
+
+# Если группа уже была
+old_group = root.findGroup(
+    GROUP_NAME
+)
+
+if old_group is not None:
+
+    ids = [
+        node.layerId()
+        for node in old_group.findLayers()
+    ]
+
+    for layer_id in ids:
+        project.removeMapLayer(
+            layer_id
+        )
+
+    root.removeChildNode(
+        old_group
+    )
+
+
+group = root.addGroup(
+    GROUP_NAME
+)
+
+
+for shp_path, name in [
+
+    (
+        polygon_path,
+        "objects_polygon"
+    ),
+
+    (
+        line_path,
+        "objects_line"
+    ),
+
+    (
+        text_path,
+        "objects_text"
+    ),
+
+]:
+
+    layer = QgsVectorLayer(
+        shp_path,
+        name,
+        "ogr"
+    )
+
+    if not layer.isValid():
+
+        print(
+            "Не удалось открыть:",
+            shp_path
+        )
+
+        continue
+
+    project.addMapLayer(
+        layer,
+        False
+    )
+
+    group.addLayer(
+        layer
+    )
+
+
+# ============================================================
+# СКРЫВАЕМ ИСХОДНЫЕ DXF
+# ============================================================
+
+for layer in selected:
+
+    node = root.findLayer(
+        layer.id()
+    )
+
+    if node is not None:
+
+        node.setItemVisibilityChecked(
+            False
+        )
+
+
+group.setExpanded(True)
+
+iface.mapCanvas().refresh()
+
+
+# ============================================================
+# ИТОГОВЫЙ ОТЧЁТ
+# ============================================================
+
+print("")
+print("=" * 80)
+print("ГОТОВО — SHP СОЗДАНЫ")
+print("=" * 80)
+
+print("")
+print("Папка:")
+print(output_dir)
+
+print("")
+print("Файлы:")
+print(line_path)
+print(polygon_path)
+print(text_path)
+
+print("")
+print(
+    "Линий:",
+    len(line_features)
+)
+
+print(
+    "Полигонов:",
+    len(polygon_features)
+)
+
+print(
+    "Подписей:",
+    len(text_features)
+)
+
+print("")
+print("По классам:")
+
+for code in sorted(stats):
+
+    x = stats[code]
+
+    total = (
+        x["line"]
+        + x["polygon"]
+        + x["text"]
+    )
+
+    print(
+        code,
+        "—",
+        x["name"],
+        "| линии:",
+        x["line"],
+        "| полигоны:",
+        x["polygon"],
+        "| текст:",
+        x["text"],
+        "| всего:",
+        total
+    )
+
+
+print("")
+print("Поля objects_line:")
+print("class_code, class_name")
+
+print("")
+print("Поля objects_polygon:")
+print("class_code, class_name")
+
+print("")
+print("Поля objects_text:")
+print("class_code, class_name, text")
+
+print("")
+print("=" * 80)
