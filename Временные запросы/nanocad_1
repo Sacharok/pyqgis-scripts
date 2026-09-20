@@ -1,75 +1,120 @@
 from qgis.core import (
     QgsProject,
-    QgsWkbTypes,
-    QgsFields,
-    QgsField,
-    QgsFeature,
-    QgsMemoryProviderUtils,
+    QgsVectorLayer,
     QgsVectorFileWriter,
-    QgsCoordinateTransformContext
+    QgsFeature,
+    QgsFeatureRequest,
+    QgsField,
+    QgsWkbTypes,
+    QgsExpression
 )
-from qgis.PyQt.QtCore import QVariant
+
 from qgis.PyQt.QtWidgets import QFileDialog
 
 import os
 
 
 # ============================================================
+# ТИПЫ ПОЛЕЙ: QGIS 3 / QGIS 4
+# ============================================================
+
+try:
+    from qgis.PyQt.QtCore import QMetaType
+
+    TYPE_INT = QMetaType.Type.Int
+    TYPE_STRING = QMetaType.Type.QString
+
+except Exception:
+    from qgis.PyQt.QtCore import QVariant
+
+    TYPE_INT = QVariant.Int
+    TYPE_STRING = QVariant.String
+
+
+# ============================================================
 # КЛАССИФИКАТОР
 # ============================================================
 
-CLASS_MAP = {
-    "3. Заземление":
-        (1000, "Заземление"),
+CLASSES = [
+    (
+        "3. Заземление",
+        1000,
+        "Заземление"
+    ),
+    (
+        "4. Технологические трубопроводы",
+        1100,
+        "Технологические трубопроводы"
+    ),
+    (
+        "9. Резервуары",
+        1200,
+        "Резервуары"
+    ),
+    (
+        "10. Подземные емкости",
+        1300,
+        "Подземные емкости"
+    ),
+    (
+        "2. Покрытие песок газон щебень",
+        1400,
+        "Покрытие песок, газон, щебень"
+    ),
+    (
+        "3. Инженерные сети",
+        1500,
+        "Инженерные сети"
+    ),
+    (
+        "5. Здания и сооружения",
+        1600,
+        "Здания и сооружения"
+    ),
+    (
+        "2. Покрытия асфальт бетон",
+        1700,
+        "Покрытия асфальт, бетон"
+    ),
+    (
+        "Радиусы",
+        1800,
+        "Радиусы"
+    ),
+]
 
-    "4. Технологические трубопроводы":
-        (1100, "Технологические трубопроводы"),
 
-    "9. Резервуары":
-        (1200, "Резервуары"),
-
-    "10. Подземные емкости":
-        (1300, "Подземные емкости"),
-
-    "2. Покрытие песок газон щебень":
-        (1400, "Покрытие песок, газон, щебень"),
-
-    "3. Инженерные сети":
-        (1500, "Инженерные сети"),
-
-    "5. Здания и сооружения":
-        (1600, "Здания и сооружения"),
-
-    "2. Покрытия асфальт бетон":
-        (1700, "Покрытия асфальт, бетон"),
-
-    "Радиусы":
-        (1800, "Радиусы"),
-}
+ROOT_GROUP_NAME = "NORMALIZED — Geoportal"
 
 
 # ============================================================
-# НОРМАЛИЗАЦИЯ НАЗВАНИЙ CAD-СЛОЁВ
+# ВЫБИРАЕМ МЕСТО СОХРАНЕНИЯ
 # ============================================================
 
-def norm(value):
+gpkg_path, _ = QFileDialog.getSaveFileName(
+    iface.mainWindow(),
+    "Сохранить нормализированные данные",
+    "",
+    "GeoPackage (*.gpkg)"
+)
 
-    if value is None:
-        return ""
+if not gpkg_path:
+    raise Exception(
+        "Сохранение отменено."
+    )
 
-    return " ".join(
-        str(value).strip().split()
-    ).casefold()
+if not gpkg_path.lower().endswith(".gpkg"):
+    gpkg_path += ".gpkg"
 
 
-CLASS_MAP_NORM = {
-    norm(k): v
-    for k, v in CLASS_MAP.items()
-}
+print("")
+print("Файл результата:")
+print(gpkg_path)
+print("")
 
 
 # ============================================================
-# ВЫБРАННЫЕ ИСХОДНЫЕ СЛОИ
+# ПРОВЕРЯЕМ ВЫБРАННЫЕ DXF-СЛОИ
 # ============================================================
 
 selected = iface.layerTreeView().selectedLayers()
@@ -124,300 +169,189 @@ if polygon_src is None:
     )
 
 
-# ============================================================
-# ВЫБОР ФАЙЛА
-# ============================================================
-
-output_path, _ = QFileDialog.getSaveFileName(
-    iface.mainWindow(),
-    "Сохранить данные для геопортала",
-    "",
-    "GeoPackage (*.gpkg)"
-)
-
-if not output_path:
-    raise Exception(
-        "Сохранение отменено."
-    )
-
-if not output_path.lower().endswith(".gpkg"):
-    output_path += ".gpkg"
+print("Определены исходные слои:")
+print("POINT   :", point_src.name())
+print("LINE    :", line_src.name())
+print("POLYGON :", polygon_src.name())
+print("")
 
 
 # ============================================================
-# ПОЛЯ
+# ФУНКЦИИ
 # ============================================================
 
-common_fields = QgsFields()
-
-common_fields.append(
-    QgsField(
-        "class_code",
-        QVariant.Int
-    )
-)
-
-common_fields.append(
-    QgsField(
-        "class_name",
-        QVariant.String,
-        len=150
-    )
-)
-
-
-text_fields = QgsFields()
-
-text_fields.append(
-    QgsField(
-        "class_code",
-        QVariant.Int
-    )
-)
-
-text_fields.append(
-    QgsField(
-        "class_name",
-        QVariant.String,
-        len=150
-    )
-)
-
-text_fields.append(
-    QgsField(
-        "text",
-        QVariant.String,
-        len=500
-    )
-)
-
-
-# ============================================================
-# СОЗДАЁМ ЧИСТЫЕ ВРЕМЕННЫЕ СЛОИ
-# ============================================================
-
-line_out = QgsMemoryProviderUtils.createMemoryLayer(
-    "objects_line",
-    common_fields,
-    line_src.wkbType(),
-    line_src.crs()
-)
-
-polygon_out = QgsMemoryProviderUtils.createMemoryLayer(
-    "objects_polygon",
-    common_fields,
-    polygon_src.wkbType(),
-    polygon_src.crs()
-)
-
-text_out = QgsMemoryProviderUtils.createMemoryLayer(
-    "objects_text",
-    text_fields,
-    point_src.wkbType(),
-    point_src.crs()
-)
-
-
-# ============================================================
-# СТАТИСТИКА
-# ============================================================
-
-stats = {}
-
-for code, name in CLASS_MAP.values():
-
-    stats[code] = {
-        "name": name,
-        "line": 0,
-        "polygon": 0,
-        "text": 0
-    }
-
-
-# ============================================================
-# ПЕРЕНОС ЛИНИЙ
-# ============================================================
-
-line_features = []
-
-for src_feature in line_src.getFeatures():
-
-    cad_layer = norm(
-        src_feature["Layer"]
-    )
-
-    cls = CLASS_MAP_NORM.get(
-        cad_layer
-    )
-
-    if cls is None:
-        continue
-
-    class_code, class_name = cls
-
-    new_feature = QgsFeature(
-        line_out.fields()
-    )
-
-    new_feature.setGeometry(
-        src_feature.geometry()
-    )
-
-    new_feature.setAttributes([
-        class_code,
-        class_name
-    ])
-
-    line_features.append(
-        new_feature
-    )
-
-    stats[class_code]["line"] += 1
-
-
-line_out.dataProvider().addFeatures(
-    line_features
-)
-
-line_out.updateExtents()
-
-
-# ============================================================
-# ПЕРЕНОС ПОЛИГОНОВ
-# ============================================================
-
-polygon_features = []
-
-for src_feature in polygon_src.getFeatures():
-
-    cad_layer = norm(
-        src_feature["Layer"]
-    )
-
-    cls = CLASS_MAP_NORM.get(
-        cad_layer
-    )
-
-    if cls is None:
-        continue
-
-    class_code, class_name = cls
-
-    new_feature = QgsFeature(
-        polygon_out.fields()
-    )
-
-    new_feature.setGeometry(
-        src_feature.geometry()
-    )
-
-    new_feature.setAttributes([
-        class_code,
-        class_name
-    ])
-
-    polygon_features.append(
-        new_feature
-    )
-
-    stats[class_code]["polygon"] += 1
-
-
-polygon_out.dataProvider().addFeatures(
-    polygon_features
-)
-
-polygon_out.updateExtents()
-
-
-# ============================================================
-# ПЕРЕНОС ТЕКСТА
-# ============================================================
-
-if point_src.fields().indexFromName("Text") == -1:
-
-    raise Exception(
-        "В точечном исходном слое нет поля Text."
-    )
-
-
-text_features = []
-
-for src_feature in point_src.getFeatures():
-
-    cad_layer = norm(
-        src_feature["Layer"]
-    )
-
-    cls = CLASS_MAP_NORM.get(
-        cad_layer
-    )
-
-    if cls is None:
-        continue
-
-    text_value = src_feature["Text"]
-
-    # Не переносим пустые точки
-    if text_value is None:
-        continue
-
-    text_value = str(
-        text_value
-    ).strip()
-
-    if not text_value:
-        continue
-
-    class_code, class_name = cls
-
-    new_feature = QgsFeature(
-        text_out.fields()
-    )
-
-    new_feature.setGeometry(
-        src_feature.geometry()
-    )
-
-    new_feature.setAttributes([
-        class_code,
-        class_name,
-        text_value
-    ])
-
-    text_features.append(
-        new_feature
-    )
-
-    stats[class_code]["text"] += 1
-
-
-text_out.dataProvider().addFeatures(
-    text_features
-)
-
-text_out.updateExtents()
-
-
-# ============================================================
-# СОХРАНЕНИЕ В GEOPACKAGE
-# ============================================================
-
-transform_context = QgsProject.instance().transformContext()
-
-
-def save_layer(
-    layer,
-    layer_name,
-    first=False
+def create_clean_layer(
+    source,
+    memory_name,
+    with_text=False
 ):
+    """
+    Создаёт временный слой с той же геометрией и CRS,
+    но БЕЗ исходных CAD-полей.
+    """
+
+    geom_name = QgsWkbTypes.displayString(
+        source.wkbType()
+    )
+
+    mem = QgsVectorLayer(
+        geom_name,
+        memory_name,
+        "memory"
+    )
+
+    if not mem.isValid():
+        raise Exception(
+            f"Не удалось создать слой {memory_name}"
+        )
+
+    mem.setCrs(
+        source.crs()
+    )
+
+    provider = mem.dataProvider()
+
+    fields = [
+        QgsField(
+            "class_code",
+            TYPE_INT
+        ),
+        QgsField(
+            "class_name",
+            TYPE_STRING,
+            len=150
+        )
+    ]
+
+    if with_text:
+        fields.append(
+            QgsField(
+                "text",
+                TYPE_STRING,
+                len=500
+            )
+        )
+
+    provider.addAttributes(
+        fields
+    )
+
+    mem.updateFields()
+
+    return mem
+
+
+def fill_clean_layer(
+    source,
+    cad_layer_name,
+    class_code,
+    class_name,
+    with_text=False
+):
+    """
+    Берёт геометрию из DXF, но переносит
+    только нужные атрибуты.
+    """
+
+    mem = create_clean_layer(
+        source,
+        f"tmp_{class_code}",
+        with_text
+    )
+
+    quoted_layer = QgsExpression.quotedString(
+        cad_layer_name
+    )
+
+    expression = (
+        f'"Layer" = {quoted_layer}'
+    )
+
+    # Для точек используем только реальные подписи
+    if with_text:
+        expression += (
+            ' AND "Text" IS NOT NULL'
+            ' AND trim("Text") <> \'\''
+        )
+
+    request = QgsFeatureRequest()
+
+    request.setFilterExpression(
+        expression
+    )
+
+    new_features = []
+
+    for source_feature in source.getFeatures(
+        request
+    ):
+
+        new_feature = QgsFeature(
+            mem.fields()
+        )
+
+        new_feature.setGeometry(
+            source_feature.geometry()
+        )
+
+        new_feature[
+            "class_code"
+        ] = class_code
+
+        new_feature[
+            "class_name"
+        ] = class_name
+
+        if with_text:
+
+            text_value = source_feature[
+                "Text"
+            ]
+
+            if text_value is None:
+                text_value = ""
+
+            new_feature[
+                "text"
+            ] = str(
+                text_value
+            )
+
+        new_features.append(
+            new_feature
+        )
+
+
+    if not new_features:
+        return None
+
+
+    mem.dataProvider().addFeatures(
+        new_features
+    )
+
+    mem.updateExtents()
+
+    return mem
+
+
+def save_to_gpkg(
+    layer,
+    gpkg_path,
+    table_name,
+    overwrite_file=False
+):
+    """
+    Записывает слой в выбранный GeoPackage.
+    """
 
     options = QgsVectorFileWriter.SaveVectorOptions()
 
     options.driverName = "GPKG"
-    options.layerName = layer_name
+    options.fileEncoding = "UTF-8"
+    options.layerName = table_name
 
-    if first:
+    if overwrite_file:
 
         options.actionOnExistingFile = (
             QgsVectorFileWriter.CreateOrOverwriteFile
@@ -432,8 +366,8 @@ def save_layer(
 
     result = QgsVectorFileWriter.writeAsVectorFormatV3(
         layer,
-        output_path,
-        transform_context,
+        gpkg_path,
+        QgsProject.instance().transformContext(),
         options
     )
 
@@ -441,104 +375,255 @@ def save_layer(
 
     if error_code != QgsVectorFileWriter.NoError:
 
+        message = (
+            result[1]
+            if len(result) > 1
+            else "Неизвестная ошибка"
+        )
+
         raise Exception(
-            f"Ошибка записи слоя {layer_name}: "
-            f"{result}"
+            f"Ошибка записи слоя {table_name}: "
+            f"{message}"
         )
 
 
-save_layer(
-    line_out,
-    "objects_line",
-    first=True
-)
-
-save_layer(
-    polygon_out,
-    "objects_polygon"
-)
-
-save_layer(
-    text_out,
-    "objects_text"
-)
-
-
 # ============================================================
-# ДОБАВЛЯЕМ РЕЗУЛЬТАТ В QGIS
+# ПОДГОТАВЛИВАЕМ ГРУППУ В QGIS
 # ============================================================
 
-from qgis.core import QgsVectorLayer
+project = QgsProject.instance()
+root = project.layerTreeRoot()
 
 
-result_group_name = "ГОТОВО — для геопортала"
-
-root = QgsProject.instance().layerTreeRoot()
-
-old = root.findGroup(
-    result_group_name
+old_group = root.findGroup(
+    ROOT_GROUP_NAME
 )
 
-if old is not None:
+if old_group is not None:
 
     old_ids = [
-        n.layerId()
-        for n in old.findLayers()
+        node.layerId()
+        for node in old_group.findLayers()
     ]
 
     for layer_id in old_ids:
-        QgsProject.instance().removeMapLayer(
+
+        project.removeMapLayer(
             layer_id
         )
 
     root.removeChildNode(
-        old
+        old_group
     )
 
 
-result_group = root.addGroup(
-    result_group_name
+main_group = root.addGroup(
+    ROOT_GROUP_NAME
 )
 
 
-for layer_name in [
-    "objects_polygon",
-    "objects_line",
-    "objects_text"
-]:
+# ============================================================
+# СОЗДАЁМ И СОХРАНЯЕМ
+# ============================================================
 
-    uri = (
-        f"{output_path}"
-        f"|layername={layer_name}"
+first_write = True
+
+created_count = 0
+
+
+for (
+    cad_layer_name,
+    class_code,
+    class_name
+) in CLASSES:
+
+    print(
+        "=" * 60
     )
 
-    layer = QgsVectorLayer(
-        uri,
-        layer_name,
-        "ogr"
+    print(
+        class_code,
+        "—",
+        class_name
     )
 
-    if not layer.isValid():
 
-        print(
-            "Не удалось добавить:",
-            layer_name
-        )
+    class_group = main_group.addGroup(
+        f"{class_code} — {class_name}"
+    )
 
-        continue
 
-    QgsProject.instance().addMapLayer(
-        layer,
+    # ========================================================
+    # ЛИНИИ
+    # ========================================================
+
+    line_layer = fill_clean_layer(
+        line_src,
+        cad_layer_name,
+        class_code,
+        class_name,
         False
     )
 
-    result_group.addLayer(
-        layer
+    if line_layer is not None:
+
+        table_name = (
+            f"class_{class_code}_line"
+        )
+
+        save_to_gpkg(
+            line_layer,
+            gpkg_path,
+            table_name,
+            first_write
+        )
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}|layername={table_name}",
+            "Линии",
+            "ogr"
+        )
+
+        if saved.isValid():
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+            class_group.addLayer(
+                saved
+            )
+
+            created_count += 1
+
+            print(
+                "Линии:",
+                saved.featureCount()
+            )
+
+
+    # ========================================================
+    # ПОЛИГОНЫ
+    # ========================================================
+
+    polygon_layer = fill_clean_layer(
+        polygon_src,
+        cad_layer_name,
+        class_code,
+        class_name,
+        False
     )
+
+    if polygon_layer is not None:
+
+        table_name = (
+            f"class_{class_code}_polygon"
+        )
+
+        save_to_gpkg(
+            polygon_layer,
+            gpkg_path,
+            table_name,
+            first_write
+        )
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}|layername={table_name}",
+            "Полигоны",
+            "ogr"
+        )
+
+        if saved.isValid():
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+            class_group.addLayer(
+                saved
+            )
+
+            created_count += 1
+
+            print(
+                "Полигоны:",
+                saved.featureCount()
+            )
+
+
+    # ========================================================
+    # ПОДПИСИ
+    # ========================================================
+
+    label_layer = fill_clean_layer(
+        point_src,
+        cad_layer_name,
+        class_code,
+        class_name,
+        True
+    )
+
+    if label_layer is not None:
+
+        table_name = (
+            f"class_{class_code}_label"
+        )
+
+        save_to_gpkg(
+            label_layer,
+            gpkg_path,
+            table_name,
+            first_write
+        )
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}|layername={table_name}",
+            "Подписи",
+            "ogr"
+        )
+
+        if saved.isValid():
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+            class_group.addLayer(
+                saved
+            )
+
+            created_count += 1
+
+            print(
+                "Подписи:",
+                saved.featureCount()
+            )
+
+
+    # Если по тематике вообще ничего нет
+    if len(
+        class_group.children()
+    ) == 0:
+
+        main_group.removeChildNode(
+            class_group
+        )
 
 
 # ============================================================
-# СКРЫВАЕМ ИСХОДНИКИ
+# СКРЫВАЕМ ИСХОДНЫЕ DXF
 # ============================================================
 
 for layer in selected:
@@ -554,78 +639,75 @@ for layer in selected:
         )
 
 
-result_group.setExpanded(True)
+# ============================================================
+# ДЕРЕВО СЛОЁВ
+# ============================================================
+
+main_group.setExpanded(
+    True
+)
+
+for node in main_group.children():
+
+    try:
+        node.setExpanded(
+            False
+        )
+    except:
+        pass
+
 
 iface.mapCanvas().refresh()
 
 
 # ============================================================
-# ИТОГ
+# ГОТОВО
 # ============================================================
 
 print("")
-print("=" * 80)
+print("=" * 70)
 print("ГОТОВО")
-print("=" * 80)
+print("=" * 70)
 
 print(
-    "GeoPackage:",
-    output_path
+    "Создано слоёв:",
+    created_count
 )
 
 print("")
 print(
-    "objects_line:",
-    len(line_features)
+    "GeoPackage:"
 )
 
 print(
-    "objects_polygon:",
-    len(polygon_features)
-)
-
-print(
-    "objects_text:",
-    len(text_features)
+    gpkg_path
 )
 
 print("")
-print("По классам:")
+print(
+    "Поля линий и полигонов:"
+)
 
-for code in sorted(stats):
-
-    x = stats[code]
-
-    total = (
-        x["line"]
-        + x["polygon"]
-        + x["text"]
-    )
-
-    print(
-        code,
-        "—",
-        x["name"],
-        "| линии:",
-        x["line"],
-        "| полигоны:",
-        x["polygon"],
-        "| текст:",
-        x["text"],
-        "| всего:",
-        total
-    )
+print(
+    "class_code, class_name"
+)
 
 print("")
-print("Поля:")
 print(
-    "objects_line    -> class_code, class_name"
-)
-print(
-    "objects_polygon -> class_code, class_name"
-)
-print(
-    "objects_text    -> class_code, class_name, text"
+    "Поля подписей:"
 )
 
-print("=" * 80)
+print(
+    "class_code, class_name, text"
+)
+
+print("")
+print(
+    "CAD-поля в результат НЕ перенесены."
+)
+
+print(
+    "Исходный DXF не изменён."
+)
+
+print("=" * 70)
