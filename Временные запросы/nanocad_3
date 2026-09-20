@@ -1,0 +1,497 @@
+from qgis.core import (
+    QgsProject,
+    QgsWkbTypes,
+    QgsField,
+    QgsExpression
+)
+
+# Совместимость QGIS 3 / QGIS 4
+try:
+    from qgis.PyQt.QtCore import QMetaType
+
+    TYPE_INT = QMetaType.Type.Int
+    TYPE_STRING = QMetaType.Type.QString
+
+except Exception:
+    from qgis.PyQt.QtCore import QVariant
+
+    TYPE_INT = QVariant.Int
+    TYPE_STRING = QVariant.String
+
+
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
+
+ROOT_GROUP_NAME = "NORMALIZED — Geoportal"
+
+CLASSES = [
+    (
+        "3. Заземление",
+        1000,
+        "Заземление"
+    ),
+    (
+        "4. Технологические трубопроводы",
+        1100,
+        "Технологические трубопроводы"
+    ),
+    (
+        "9. Резервуары",
+        1200,
+        "Резервуары"
+    ),
+    (
+        "10. Подземные емкости",
+        1300,
+        "Подземные емкости"
+    ),
+    (
+        "2. Покрытие песок газон щебень",
+        1400,
+        "Покрытие песок, газон, щебень"
+    ),
+    (
+        "3. Инженерные сети",
+        1500,
+        "Инженерные сети"
+    ),
+    (
+        "5. Здания и сооружения",
+        1600,
+        "Здания и сооружения"
+    ),
+    (
+        "2. Покрытия асфальт бетон",
+        1700,
+        "Покрытия асфальт, бетон"
+    ),
+    (
+        "Радиусы",
+        1800,
+        "Радиусы"
+    ),
+]
+
+
+# ============================================================
+# ИСХОДНЫЕ СЛОИ
+# ============================================================
+
+selected = iface.layerTreeView().selectedLayers()
+
+if len(selected) != 3:
+    raise Exception(
+        "Нужно выделить ровно 3 исходных DXF-слоя: "
+        "точки, линии и полигоны."
+    )
+
+
+point_src = None
+line_src = None
+polygon_src = None
+
+
+for lyr in selected:
+
+    if lyr.fields().indexFromName("Layer") == -1:
+        raise Exception(
+            f'В слое "{lyr.name()}" нет поля Layer. '
+            f'Похоже, выбран не исходный DXF-слой.'
+        )
+
+    geom_type = QgsWkbTypes.geometryType(
+        lyr.wkbType()
+    )
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        point_src = lyr
+
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        line_src = lyr
+
+    elif geom_type == QgsWkbTypes.PolygonGeometry:
+        polygon_src = lyr
+
+
+if point_src is None:
+    raise Exception(
+        "Не найден точечный исходный DXF-слой."
+    )
+
+if line_src is None:
+    raise Exception(
+        "Не найден линейный исходный DXF-слой."
+    )
+
+if polygon_src is None:
+    raise Exception(
+        "Не найден полигональный исходный DXF-слой."
+    )
+
+
+print("Исходные слои:")
+print("Точки:", point_src.name())
+print("Линии:", line_src.name())
+print("Полигоны:", polygon_src.name())
+
+
+# ============================================================
+# ПРОЕКТ
+# ============================================================
+
+project = QgsProject.instance()
+root = project.layerTreeRoot()
+
+
+# Удаляем результат предыдущего запуска
+old_group = root.findGroup(
+    ROOT_GROUP_NAME
+)
+
+if old_group is not None:
+
+    old_layer_ids = [
+        node.layerId()
+        for node in old_group.findLayers()
+    ]
+
+    for layer_id in old_layer_ids:
+        project.removeMapLayer(
+            layer_id
+        )
+
+    root.removeChildNode(
+        old_group
+    )
+
+
+main_group = root.addGroup(
+    ROOT_GROUP_NAME
+)
+
+
+# ============================================================
+# ФУНКЦИИ
+# ============================================================
+
+def escape_sql(value):
+    return str(value).replace(
+        "'",
+        "''"
+    )
+
+
+def layer_has_features(layer):
+    iterator = layer.getFeatures()
+
+    try:
+        next(iterator)
+        return True
+
+    except StopIteration:
+        return False
+
+
+def add_class_fields(
+    layer,
+    class_code,
+    class_name
+):
+    """
+    Пока создаём ВИРТУАЛЬНЫЕ поля.
+    DXF физически не изменяется.
+
+    При окончательной выгрузке в GeoPackage
+    мы материализуем их как обычные поля.
+    """
+
+    if layer.fields().indexFromName(
+        "class_code"
+    ) == -1:
+
+        layer.addExpressionField(
+            str(class_code),
+            QgsField(
+                "class_code",
+                TYPE_INT
+            )
+        )
+
+    if layer.fields().indexFromName(
+        "class_name"
+    ) == -1:
+
+        expression = QgsExpression.quotedString(
+            class_name
+        )
+
+        layer.addExpressionField(
+            expression,
+            QgsField(
+                "class_name",
+                TYPE_STRING,
+                len=150
+            )
+        )
+
+
+def make_clone(
+    source,
+    cad_layer,
+    class_code,
+    class_name,
+    display_name,
+    text_only=False
+):
+
+    clone = source.clone()
+
+    clone.setName(
+        display_name
+    )
+
+    cad_layer_sql = escape_sql(
+        cad_layer
+    )
+
+    filter_sql = (
+        f"\"Layer\" = "
+        f"'{cad_layer_sql}'"
+    )
+
+    # В точечном слое оставляем только подписи,
+    # как мы договорились ранее.
+    if text_only:
+
+        if clone.fields().indexFromName(
+            "Text"
+        ) == -1:
+            return None
+
+        filter_sql += (
+            ' AND "Text" IS NOT NULL'
+            ' AND "Text" <> \'\''
+        )
+
+    ok = clone.setSubsetString(
+        filter_sql
+    )
+
+    if not ok:
+        print(
+            "Не удалось применить фильтр:",
+            cad_layer,
+            display_name
+        )
+        return None
+
+    if not layer_has_features(
+        clone
+    ):
+        return None
+
+    add_class_fields(
+        clone,
+        class_code,
+        class_name
+    )
+
+    return clone
+
+
+# ============================================================
+# СОЗДАЁМ НОРМАЛИЗОВАННУЮ СТРУКТУРУ
+# ============================================================
+
+created_layers = []
+
+
+for (
+    cad_layer,
+    class_code,
+    class_name
+) in CLASSES:
+
+    thematic_group = main_group.addGroup(
+        f"{class_code} — {class_name}"
+    )
+
+
+    # --------------------------------------------------------
+    # ПОЛИГОНЫ
+    # --------------------------------------------------------
+
+    poly = make_clone(
+        polygon_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Полигоны"
+    )
+
+    if poly is not None:
+
+        project.addMapLayer(
+            poly,
+            False
+        )
+
+        thematic_group.addLayer(
+            poly
+        )
+
+        created_layers.append(
+            poly
+        )
+
+
+    # --------------------------------------------------------
+    # ЛИНИИ
+    # --------------------------------------------------------
+
+    line = make_clone(
+        line_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Линии"
+    )
+
+    if line is not None:
+
+        project.addMapLayer(
+            line,
+            False
+        )
+
+        thematic_group.addLayer(
+            line
+        )
+
+        created_layers.append(
+            line
+        )
+
+
+    # --------------------------------------------------------
+    # ПОДПИСИ
+    # --------------------------------------------------------
+
+    text = make_clone(
+        point_src,
+        cad_layer,
+        class_code,
+        class_name,
+        "Подписи",
+        text_only=True
+    )
+
+    if text is not None:
+
+        project.addMapLayer(
+            text,
+            False
+        )
+
+        thematic_group.addLayer(
+            text
+        )
+
+        created_layers.append(
+            text
+        )
+
+
+    # Если в тематике вообще ничего нет,
+    # пустую группу удаляем.
+    if len(
+        thematic_group.children()
+    ) == 0:
+
+        main_group.removeChildNode(
+            thematic_group
+        )
+
+
+# ============================================================
+# СКРЫВАЕМ ТРИ ИСХОДНЫХ DXF-СЛОЯ
+# ============================================================
+
+for lyr in selected:
+
+    node = root.findLayer(
+        lyr.id()
+    )
+
+    if node is not None:
+        node.setItemVisibilityChecked(
+            False
+        )
+
+
+# ============================================================
+# ОФОРМЛЕНИЕ ДЕРЕВА
+# ============================================================
+
+main_group.setExpanded(True)
+
+for child in main_group.children():
+
+    if hasattr(
+        child,
+        "setExpanded"
+    ):
+        child.setExpanded(
+            False
+        )
+
+
+iface.mapCanvas().refresh()
+
+
+# ============================================================
+# ОТЧЁТ
+# ============================================================
+
+print("")
+print("=" * 70)
+print("НОРМАЛИЗАЦИЯ СОЗДАНА")
+print("=" * 70)
+
+for (
+    cad_layer,
+    class_code,
+    class_name
+) in CLASSES:
+
+    print(
+        class_code,
+        "—",
+        class_name
+    )
+
+print("")
+print(
+    "Создано QGIS-слоёв:",
+    len(created_layers)
+)
+
+print("")
+print(
+    "Исходная геометрия НЕ изменялась."
+)
+
+print(
+    "Исходный CAD-стиль сохранён."
+)
+
+print(
+    "class_code и class_name добавлены."
+)
+
+print(
+    "Пустые точечные объекты не перенесены."
+)
+
+print("=" * 70)
