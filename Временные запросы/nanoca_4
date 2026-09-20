@@ -1,0 +1,1732 @@
+from qgis.core import (
+    QgsProject,
+    QgsVectorLayer,
+    QgsVectorFileWriter,
+    QgsFeature,
+    QgsFeatureRequest,
+    QgsField,
+    QgsWkbTypes,
+    QgsExpression,
+    QgsSymbol,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsPalLayerSettings,
+    QgsVectorLayerSimpleLabeling,
+    QgsTextFormat,
+    QgsMarkerSymbol,
+    QgsSingleSymbolRenderer
+)
+
+from qgis.PyQt.QtWidgets import QFileDialog
+from qgis.PyQt.QtGui import QColor
+
+from osgeo import ogr
+
+from collections import defaultdict
+import colorsys
+import re
+
+
+# ============================================================
+# QGIS 3 / QGIS 4
+# ============================================================
+
+try:
+    from qgis.PyQt.QtCore import QMetaType
+
+    TYPE_INT = QMetaType.Type.Int
+    TYPE_STRING = QMetaType.Type.QString
+
+except Exception:
+    from qgis.PyQt.QtCore import QVariant
+
+    TYPE_INT = QVariant.Int
+    TYPE_STRING = QVariant.String
+
+
+# ============================================================
+# ТЕМАТИЧЕСКИЕ ДИАПАЗОНЫ
+# ============================================================
+
+THEMES = [
+    (
+        "3. Заземление",
+        1000,
+        "Заземление"
+    ),
+    (
+        "4. Технологические трубопроводы",
+        1100,
+        "Технологические трубопроводы"
+    ),
+    (
+        "9. Резервуары",
+        1200,
+        "Резервуары"
+    ),
+    (
+        "10. Подземные емкости",
+        1300,
+        "Подземные емкости"
+    ),
+    (
+        "2. Покрытие песок газон щебень",
+        1400,
+        "Покрытие песок, газон, щебень"
+    ),
+    (
+        "3. Инженерные сети",
+        1500,
+        "Инженерные сети"
+    ),
+    (
+        "5. Здания и сооружения",
+        1600,
+        "Здания и сооружения"
+    ),
+    (
+        "2. Покрытия асфальт бетон",
+        1700,
+        "Покрытия асфальт, бетон"
+    ),
+    (
+        "Радиусы",
+        1800,
+        "Радиусы"
+    ),
+]
+
+
+RESULT_GROUP = "NORMALIZED — Geoportal"
+
+
+# ============================================================
+# НОРМАЛИЗОВАННАЯ ПАЛИТРА
+#
+# Это ВСЯ палитра.
+# Исходных оттенков в результате больше не будет.
+# ============================================================
+
+NORMAL_ORDER = [
+    "black",
+    "gray",
+    "blue",
+    "cyan",
+    "green",
+    "yellow",
+    "brown",
+    "red"
+]
+
+
+PALETTE = {
+
+    "black": {
+        "name": "чёрный",
+        "color": "#000000"
+    },
+
+    "gray": {
+        "name": "серый",
+        "color": "#808080"
+    },
+
+    "blue": {
+        "name": "синий",
+        "color": "#0000FF"
+    },
+
+    "cyan": {
+        "name": "голубой",
+        "color": "#00BFC4"
+    },
+
+    "green": {
+        "name": "зелёный",
+        "color": "#00A000"
+    },
+
+    "yellow": {
+        "name": "жёлтый",
+        "color": "#FFD000"
+    },
+
+    "brown": {
+        "name": "коричневый",
+        "color": "#A0522D"
+    },
+
+    # Сюда же попадают розовые
+    # и пурпурные исходные оттенки
+    "red": {
+        "name": "красный / пурпурный",
+        "color": "#E00040"
+    }
+}
+
+
+# ============================================================
+# ВЫБОР ФАЙЛА
+# ============================================================
+
+gpkg_path, _ = QFileDialog.getSaveFileName(
+    iface.mainWindow(),
+    "Сохранить нормализированные данные",
+    "",
+    "GeoPackage (*.gpkg)"
+)
+
+if not gpkg_path:
+    raise Exception(
+        "Сохранение отменено."
+    )
+
+if not gpkg_path.lower().endswith(".gpkg"):
+    gpkg_path += ".gpkg"
+
+
+# ============================================================
+# ВЫБРАННЫЕ ИСХОДНЫЕ DXF-СЛОИ
+# ============================================================
+
+selected = iface.layerTreeView().selectedLayers()
+
+if len(selected) != 3:
+    raise Exception(
+        "Выдели ровно 3 ИСХОДНЫХ DXF-слоя: "
+        "точки, линии и полигоны."
+    )
+
+
+point_src = None
+line_src = None
+polygon_src = None
+
+
+for layer in selected:
+
+    if layer.fields().indexFromName("Layer") == -1:
+        raise Exception(
+            f'В слое "{layer.name()}" нет поля Layer. '
+            f'Нужны исходные DXF-слои.'
+        )
+
+    if layer.fields().indexFromName(
+        "EntityHandle"
+    ) == -1:
+        raise Exception(
+            f'В слое "{layer.name()}" '
+            f'нет поля EntityHandle.'
+        )
+
+    geom_type = QgsWkbTypes.geometryType(
+        layer.wkbType()
+    )
+
+    if geom_type == QgsWkbTypes.PointGeometry:
+        point_src = layer
+
+    elif geom_type == QgsWkbTypes.LineGeometry:
+        line_src = layer
+
+    elif geom_type == QgsWkbTypes.PolygonGeometry:
+        polygon_src = layer
+
+
+if point_src is None:
+    raise Exception(
+        "Не найден точечный DXF-слой."
+    )
+
+if line_src is None:
+    raise Exception(
+        "Не найден линейный DXF-слой."
+    )
+
+if polygon_src is None:
+    raise Exception(
+        "Не найден полигональный DXF-слой."
+    )
+
+
+# ============================================================
+# ОТКРЫВАЕМ DXF ЧЕРЕЗ OGR
+#
+# Он нужен только чтобы узнать исходный цвет.
+# Эти данные в GeoPackage не попадут.
+# ============================================================
+
+dxf_path = (
+    selected[0]
+    .dataProvider()
+    .dataSourceUri()
+    .split("|")[0]
+)
+
+ds = ogr.Open(
+    dxf_path
+)
+
+if ds is None:
+    raise Exception(
+        "Не удалось открыть DXF через OGR."
+    )
+
+
+ogr_layer = ds.GetLayerByName(
+    "entities"
+)
+
+if ogr_layer is None:
+    ogr_layer = ds.GetLayer(0)
+
+if ogr_layer is None:
+    raise Exception(
+        "В DXF не найден слой entities."
+    )
+
+
+# ============================================================
+# ФУНКЦИИ
+# ============================================================
+
+def clean_handle(value):
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def extract_color(style):
+
+    """
+    Извлекаем реальный исходный HEX
+    из OGR Feature Style.
+    """
+
+    if not style:
+        return None
+
+
+    # Для HATCH сначала цвет заливки
+    match = re.search(
+        r'(?:^|[,(])fc:(#[0-9A-Fa-f]{6})',
+        style
+    )
+
+    if match:
+        return match.group(1).upper()
+
+
+    # PEN / LABEL
+    match = re.search(
+        r'(?:^|[,(])c:(#[0-9A-Fa-f]{6})',
+        style
+    )
+
+    if match:
+        return match.group(1).upper()
+
+
+    return None
+
+
+def ogr_geometry_group(feature):
+
+    subclasses = str(
+        feature.GetField("SubClasses")
+        or ""
+    )
+
+    style = (
+        feature.GetStyleString()
+        or ""
+    )
+
+
+    # Текст в нашем QGIS идёт
+    # в точечном слое
+    if (
+        "AcDbText" in subclasses
+        or "AcDbMText" in subclasses
+        or "LABEL(" in style
+    ):
+        return "POINT"
+
+
+    if "AcDbHatch" in subclasses:
+        return "POLYGON"
+
+
+    geom = feature.GetGeometryRef()
+
+    if geom is None:
+        return None
+
+
+    geom_name = (
+        geom.GetGeometryName()
+        .upper()
+    )
+
+
+    if "POLYGON" in geom_name:
+        return "POLYGON"
+
+    if (
+        "LINE" in geom_name
+        or "CURVE" in geom_name
+        or "GEOMETRYCOLLECTION" in geom_name
+    ):
+        return "LINE"
+
+    if "POINT" in geom_name:
+        return "POINT"
+
+
+    return None
+
+
+# ============================================================
+# НОРМАЛИЗАЦИЯ ЦВЕТА
+#
+# Здесь как раз происходит сокращение оттенков.
+# ============================================================
+
+def normalize_color(hex_color):
+
+    # Если цвет почему-либо не прочитался,
+    # относим его к чёрному, а не создаём
+    # отдельный класс "NO_COLOR".
+    if not hex_color:
+        return "black"
+
+
+    value = (
+        hex_color
+        .replace("#", "")
+        .strip()
+    )
+
+
+    if len(value) != 6:
+        return "black"
+
+
+    try:
+
+        r = int(
+            value[0:2],
+            16
+        ) / 255.0
+
+        g = int(
+            value[2:4],
+            16
+        ) / 255.0
+
+        b = int(
+            value[4:6],
+            16
+        ) / 255.0
+
+    except Exception:
+
+        return "black"
+
+
+    h, s, v = colorsys.rgb_to_hsv(
+        r,
+        g,
+        b
+    )
+
+    h *= 360.0
+
+
+    # --------------------------------------------------------
+    # Очень тёмные оттенки -> чёрный
+    #
+    # Например тёмно-серые/тёмно-синие,
+    # которые визуально уже почти чёрные.
+    # --------------------------------------------------------
+
+    if v <= 0.22:
+        return "black"
+
+
+    # --------------------------------------------------------
+    # Низкая насыщенность -> серый
+    #
+    # #545454
+    # #989898
+    # #BABABA
+    # #DCDCDC
+    # и подобные
+    # --------------------------------------------------------
+
+    if s <= 0.16:
+        return "gray"
+
+
+    # --------------------------------------------------------
+    # Коричневые / оранжево-коричневые
+    # --------------------------------------------------------
+
+    if 15 <= h < 45:
+        return "brown"
+
+
+    # --------------------------------------------------------
+    # Жёлтые
+    # --------------------------------------------------------
+
+    if 45 <= h < 75:
+        return "yellow"
+
+
+    # --------------------------------------------------------
+    # Зелёные
+    # --------------------------------------------------------
+
+    if 75 <= h < 175:
+        return "green"
+
+
+    # --------------------------------------------------------
+    # Голубые / бирюзовые
+    # --------------------------------------------------------
+
+    if 175 <= h < 200:
+        return "cyan"
+
+
+    # --------------------------------------------------------
+    # Синие
+    # --------------------------------------------------------
+
+    if 200 <= h < 265:
+        return "blue"
+
+
+    # --------------------------------------------------------
+    # Красные + розовые + пурпурные
+    #
+    # Специально объединяем,
+    # чтобы не плодить классы.
+    # --------------------------------------------------------
+
+    return "red"
+
+
+# ============================================================
+# СОПОСТАВЛЯЕМ DXF-ОБЪЕКТ -> ИСХОДНЫЙ ЦВЕТ
+# ============================================================
+
+source_colors = {}
+
+fallback_colors = {}
+
+
+ogr_layer.ResetReading()
+
+
+for feature in ogr_layer:
+
+    cad_layer = feature.GetField(
+        "Layer"
+    )
+
+    if cad_layer is None:
+        continue
+
+
+    handle = clean_handle(
+        feature.GetField(
+            "EntityHandle"
+        )
+    )
+
+    if not handle:
+        continue
+
+
+    geom_group = ogr_geometry_group(
+        feature
+    )
+
+
+    color = extract_color(
+        feature.GetStyleString()
+        or ""
+    )
+
+
+    if not color:
+        continue
+
+
+    key = (
+        str(cad_layer),
+        handle,
+        geom_group
+    )
+
+
+    source_colors[key] = color
+
+
+    fallback_key = (
+        str(cad_layer),
+        handle
+    )
+
+    if fallback_key not in fallback_colors:
+        fallback_colors[
+            fallback_key
+        ] = color
+
+
+def get_source_color(
+    feature,
+    cad_layer,
+    geom_group
+):
+
+    handle = clean_handle(
+        feature[
+            "EntityHandle"
+        ]
+    )
+
+
+    color = source_colors.get(
+        (
+            cad_layer,
+            handle,
+            geom_group
+        )
+    )
+
+
+    if color:
+        return color
+
+
+    return fallback_colors.get(
+        (
+            cad_layer,
+            handle
+        )
+    )
+
+
+# ============================================================
+# СОБИРАЕМ НОРМАЛИЗОВАННЫЕ ЦВЕТА
+# ПО КАЖДОЙ ТЕМАТИКЕ
+# ============================================================
+
+theme_stats = {}
+
+
+for (
+    cad_layer,
+    base_code,
+    class_name
+) in THEMES:
+
+    stats = {}
+
+
+    for group in NORMAL_ORDER:
+
+        stats[group] = {
+            "count": 0,
+            "raw_colors": set()
+        }
+
+
+    expression = (
+        f'"Layer" = '
+        f'{QgsExpression.quotedString(cad_layer)}'
+    )
+
+
+    request = QgsFeatureRequest()
+
+    request.setFilterExpression(
+        expression
+    )
+
+
+    # ========================================================
+    # ЛИНИИ
+    # ========================================================
+
+    for feature in line_src.getFeatures(
+        request
+    ):
+
+        raw_color = get_source_color(
+            feature,
+            cad_layer,
+            "LINE"
+        )
+
+        normal = normalize_color(
+            raw_color
+        )
+
+        stats[normal]["count"] += 1
+
+        if raw_color:
+            stats[normal][
+                "raw_colors"
+            ].add(
+                raw_color
+            )
+
+
+    # ========================================================
+    # ПОЛИГОНЫ
+    # ========================================================
+
+    for feature in polygon_src.getFeatures(
+        request
+    ):
+
+        raw_color = get_source_color(
+            feature,
+            cad_layer,
+            "POLYGON"
+        )
+
+        normal = normalize_color(
+            raw_color
+        )
+
+        stats[normal]["count"] += 1
+
+        if raw_color:
+            stats[normal][
+                "raw_colors"
+            ].add(
+                raw_color
+            )
+
+
+    # ========================================================
+    # ПОДПИСИ
+    #
+    # Пустые точки отбрасываем.
+    # ========================================================
+
+    if point_src.fields().indexFromName(
+        "Text"
+    ) != -1:
+
+        for feature in point_src.getFeatures(
+            request
+        ):
+
+            text = feature[
+                "Text"
+            ]
+
+            if text is None:
+                continue
+
+            if not str(text).strip():
+                continue
+
+
+            raw_color = get_source_color(
+                feature,
+                cad_layer,
+                "POINT"
+            )
+
+            normal = normalize_color(
+                raw_color
+            )
+
+            stats[normal]["count"] += 1
+
+            if raw_color:
+                stats[normal][
+                    "raw_colors"
+                ].add(
+                    raw_color
+                )
+
+
+    theme_stats[
+        cad_layer
+    ] = stats
+
+
+# ============================================================
+# СОЗДАЁМ class_code
+#
+# Внутри каждой тематики коды идут подряд.
+#
+# Например:
+# 1500 чёрный
+# 1501 серый
+# 1502 синий
+#
+# Но если серого нет:
+# 1500 чёрный
+# 1501 синий
+#
+# Никаких дыр и десятков оттенков.
+# ============================================================
+
+class_map = {}
+
+code_style = {}
+
+
+for (
+    cad_layer,
+    base_code,
+    class_name
+) in THEMES:
+
+    stats = theme_stats[
+        cad_layer
+    ]
+
+
+    present_groups = [
+        group
+        for group in NORMAL_ORDER
+        if stats[group]["count"] > 0
+    ]
+
+
+    for index, group in enumerate(
+        present_groups
+    ):
+
+        code = (
+            base_code
+            + index
+        )
+
+
+        class_map[
+            (
+                cad_layer,
+                group
+            )
+        ] = (
+            code,
+            class_name
+        )
+
+
+        code_style[
+            code
+        ] = group
+
+
+# ============================================================
+# ПОКАЗЫВАЕМ РЕЗУЛЬТАТ НОРМАЛИЗАЦИИ
+# В КОНСОЛИ
+#
+# Здесь можно увидеть:
+#
+# #0000FF, #001F7F, #0029A5
+# -> один СИНИЙ class_code.
+# ============================================================
+
+print("")
+print("=" * 85)
+print("НОРМАЛИЗОВАННЫЙ КЛАССИФИКАТОР")
+print("=" * 85)
+
+
+for (
+    cad_layer,
+    base_code,
+    class_name
+) in THEMES:
+
+    stats = theme_stats[
+        cad_layer
+    ]
+
+
+    print("")
+    print(
+        cad_layer
+    )
+
+
+    for group in NORMAL_ORDER:
+
+        if stats[group]["count"] == 0:
+            continue
+
+
+        code, _ = class_map[
+            (
+                cad_layer,
+                group
+            )
+        ]
+
+
+        palette_name = (
+            PALETTE[group]["name"]
+        )
+
+
+        raw = sorted(
+            stats[group][
+                "raw_colors"
+            ]
+        )
+
+
+        raw_text = (
+            ", ".join(raw)
+            if raw
+            else "-"
+        )
+
+
+        print(
+            f"  {code}"
+            f" | {class_name}"
+            f" | {palette_name}"
+            f" | объектов: "
+            f'{stats[group]["count"]}'
+        )
+
+        print(
+            f"       исходные цвета: "
+            f"{raw_text}"
+        )
+
+
+# ============================================================
+# СОЗДАЁМ ЧИСТЫЙ ВРЕМЕННЫЙ СЛОЙ
+# ============================================================
+
+def create_clean_layer(
+    source,
+    name,
+    with_text=False
+):
+
+    geom_name = (
+        QgsWkbTypes.displayString(
+            source.wkbType()
+        )
+    )
+
+
+    result = QgsVectorLayer(
+        geom_name,
+        name,
+        "memory"
+    )
+
+
+    if not result.isValid():
+        raise Exception(
+            f"Не удалось создать "
+            f"временный слой {name}"
+        )
+
+
+    result.setCrs(
+        source.crs()
+    )
+
+
+    fields = [
+        QgsField(
+            "class_code",
+            TYPE_INT
+        ),
+
+        QgsField(
+            "class_name",
+            TYPE_STRING,
+            len=200
+        )
+    ]
+
+
+    if with_text:
+
+        fields.append(
+            QgsField(
+                "text",
+                TYPE_STRING,
+                len=500
+            )
+        )
+
+
+    result.dataProvider().addAttributes(
+        fields
+    )
+
+    result.updateFields()
+
+
+    return result
+
+
+# ============================================================
+# ЗАПОЛНЯЕМ ЧИСТЫЙ СЛОЙ
+# ============================================================
+
+def build_layer(
+    source,
+    cad_layer,
+    geom_group,
+    temp_name,
+    with_text=False
+):
+
+    result = create_clean_layer(
+        source,
+        temp_name,
+        with_text
+    )
+
+
+    expression = (
+        f'"Layer" = '
+        f'{QgsExpression.quotedString(cad_layer)}'
+    )
+
+
+    request = QgsFeatureRequest()
+
+    request.setFilterExpression(
+        expression
+    )
+
+
+    output_features = []
+
+
+    for feature in source.getFeatures(
+        request
+    ):
+
+
+        # ----------------------------------------------------
+        # Точки без текста нам не нужны
+        # ----------------------------------------------------
+
+        if with_text:
+
+            value = feature[
+                "Text"
+            ]
+
+            if value is None:
+                continue
+
+
+            text_value = str(
+                value
+            ).strip()
+
+
+            if not text_value:
+                continue
+
+
+        # ----------------------------------------------------
+        # Исходный цвет
+        # ----------------------------------------------------
+
+        raw_color = get_source_color(
+            feature,
+            cad_layer,
+            geom_group
+        )
+
+
+        # ----------------------------------------------------
+        # Нормализованный цвет
+        # ----------------------------------------------------
+
+        normal_group = normalize_color(
+            raw_color
+        )
+
+
+        key = (
+            cad_layer,
+            normal_group
+        )
+
+
+        if key not in class_map:
+            continue
+
+
+        class_code, class_name = (
+            class_map[key]
+        )
+
+
+        # ----------------------------------------------------
+        # Новый объект
+        # ----------------------------------------------------
+
+        new_feature = QgsFeature(
+            result.fields()
+        )
+
+
+        new_feature.setGeometry(
+            feature.geometry()
+        )
+
+
+        new_feature[
+            "class_code"
+        ] = class_code
+
+
+        new_feature[
+            "class_name"
+        ] = class_name
+
+
+        if with_text:
+
+            new_feature[
+                "text"
+            ] = text_value
+
+
+        output_features.append(
+            new_feature
+        )
+
+
+    if not output_features:
+        return None
+
+
+    result.dataProvider().addFeatures(
+        output_features
+    )
+
+
+    result.updateExtents()
+
+
+    return result
+
+
+# ============================================================
+# СОХРАНЕНИЕ В GeoPackage
+# ============================================================
+
+def save_layer(
+    layer,
+    table_name,
+    first_write=False
+):
+
+    options = (
+        QgsVectorFileWriter
+        .SaveVectorOptions()
+    )
+
+
+    options.driverName = "GPKG"
+
+    options.fileEncoding = "UTF-8"
+
+    options.layerName = table_name
+
+
+    try:
+
+        if first_write:
+
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter
+                .CreateOrOverwriteFile
+            )
+
+        else:
+
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter
+                .CreateOrOverwriteLayer
+            )
+
+    except AttributeError:
+
+        if first_write:
+
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter
+                .ActionOnExistingFile
+                .CreateOrOverwriteFile
+            )
+
+        else:
+
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter
+                .ActionOnExistingFile
+                .CreateOrOverwriteLayer
+            )
+
+
+    result = (
+        QgsVectorFileWriter
+        .writeAsVectorFormatV3(
+            layer,
+            gpkg_path,
+            QgsProject.instance()
+            .transformContext(),
+            options
+        )
+    )
+
+
+    if (
+        result[0]
+        != QgsVectorFileWriter.NoError
+    ):
+
+        message = (
+            result[1]
+            if len(result) > 1
+            else "Неизвестная ошибка"
+        )
+
+        raise Exception(
+            f"Ошибка записи "
+            f"{table_name}: "
+            f"{message}"
+        )
+
+
+# ============================================================
+# СТИЛЬ В QGIS
+#
+# Здесь уже используются ТОЛЬКО
+# нормализованные цвета.
+# ============================================================
+
+def apply_normalized_renderer(
+    layer,
+    cad_layer
+):
+
+    if (
+        layer.geometryType()
+        == QgsWkbTypes.PointGeometry
+    ):
+        return
+
+
+    categories = []
+
+
+    stats = theme_stats[
+        cad_layer
+    ]
+
+
+    for group in NORMAL_ORDER:
+
+        if stats[group]["count"] == 0:
+            continue
+
+
+        code, class_name = class_map[
+            (
+                cad_layer,
+                group
+            )
+        ]
+
+
+        color = PALETTE[
+            group
+        ]["color"]
+
+
+        palette_name = PALETTE[
+            group
+        ]["name"]
+
+
+        symbol = QgsSymbol.defaultSymbol(
+            layer.geometryType()
+        )
+
+
+        symbol.setColor(
+            QColor(
+                color
+            )
+        )
+
+
+        category = QgsRendererCategory(
+            code,
+            symbol,
+            f"{code} — {palette_name}"
+        )
+
+
+        categories.append(
+            category
+        )
+
+
+    renderer = (
+        QgsCategorizedSymbolRenderer(
+            "class_code",
+            categories
+        )
+    )
+
+
+    layer.setRenderer(
+        renderer
+    )
+
+
+    layer.triggerRepaint()
+
+
+# ============================================================
+# ОФОРМЛЕНИЕ ПОДПИСЕЙ
+# ============================================================
+
+def setup_labels(
+    layer
+):
+
+    pal = QgsPalLayerSettings()
+
+    pal.enabled = True
+
+    pal.fieldName = "text"
+
+
+    text_format = QgsTextFormat()
+
+    text_format.setSize(
+        8
+    )
+
+
+    pal.setFormat(
+        text_format
+    )
+
+
+    layer.setLabeling(
+        QgsVectorLayerSimpleLabeling(
+            pal
+        )
+    )
+
+
+    layer.setLabelsEnabled(
+        True
+    )
+
+
+    # Сама точка не отображается.
+    # Показывается только текст.
+    marker = QgsMarkerSymbol.createSimple(
+        {
+            "size": "0"
+        }
+    )
+
+
+    layer.setRenderer(
+        QgsSingleSymbolRenderer(
+            marker
+        )
+    )
+
+
+# ============================================================
+# ГРУППА В QGIS
+# ============================================================
+
+project = QgsProject.instance()
+
+root = project.layerTreeRoot()
+
+
+old_group = root.findGroup(
+    RESULT_GROUP
+)
+
+
+if old_group is not None:
+
+    ids = [
+        node.layerId()
+        for node in old_group.findLayers()
+    ]
+
+
+    for layer_id in ids:
+
+        project.removeMapLayer(
+            layer_id
+        )
+
+
+    root.removeChildNode(
+        old_group
+    )
+
+
+main_group = root.addGroup(
+    RESULT_GROUP
+)
+
+
+# ============================================================
+# СОЗДАЁМ И СОХРАНЯЕМ РЕЗУЛЬТАТ
+# ============================================================
+
+first_write = True
+
+created_count = 0
+
+
+for (
+    cad_layer,
+    base_code,
+    class_name
+) in THEMES:
+
+
+    theme_group = main_group.addGroup(
+        f"{base_code}–{base_code + 99} "
+        f"— {class_name}"
+    )
+
+
+    # ========================================================
+    # ЛИНИИ
+    # ========================================================
+
+    line_result = build_layer(
+        line_src,
+        cad_layer,
+        "LINE",
+        f"tmp_{base_code}_line"
+    )
+
+
+    if line_result is not None:
+
+        table_name = (
+            f"norm_{base_code}_line"
+        )
+
+
+        save_layer(
+            line_result,
+            table_name,
+            first_write
+        )
+
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}"
+            f"|layername={table_name}",
+            "Линии",
+            "ogr"
+        )
+
+
+        if saved.isValid():
+
+            apply_normalized_renderer(
+                saved,
+                cad_layer
+            )
+
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+
+            theme_group.addLayer(
+                saved
+            )
+
+
+            created_count += 1
+
+
+    # ========================================================
+    # ПОЛИГОНЫ
+    # ========================================================
+
+    polygon_result = build_layer(
+        polygon_src,
+        cad_layer,
+        "POLYGON",
+        f"tmp_{base_code}_polygon"
+    )
+
+
+    if polygon_result is not None:
+
+        table_name = (
+            f"norm_{base_code}_polygon"
+        )
+
+
+        save_layer(
+            polygon_result,
+            table_name,
+            first_write
+        )
+
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}"
+            f"|layername={table_name}",
+            "Полигоны",
+            "ogr"
+        )
+
+
+        if saved.isValid():
+
+            apply_normalized_renderer(
+                saved,
+                cad_layer
+            )
+
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+
+            theme_group.addLayer(
+                saved
+            )
+
+
+            created_count += 1
+
+
+    # ========================================================
+    # ПОДПИСИ
+    # ========================================================
+
+    label_result = build_layer(
+        point_src,
+        cad_layer,
+        "POINT",
+        f"tmp_{base_code}_label",
+        True
+    )
+
+
+    if label_result is not None:
+
+        table_name = (
+            f"norm_{base_code}_label"
+        )
+
+
+        save_layer(
+            label_result,
+            table_name,
+            first_write
+        )
+
+
+        first_write = False
+
+
+        saved = QgsVectorLayer(
+            f"{gpkg_path}"
+            f"|layername={table_name}",
+            "Подписи",
+            "ogr"
+        )
+
+
+        if saved.isValid():
+
+            setup_labels(
+                saved
+            )
+
+
+            project.addMapLayer(
+                saved,
+                False
+            )
+
+
+            theme_group.addLayer(
+                saved
+            )
+
+
+            created_count += 1
+
+
+    # Если тематика пустая
+    if len(
+        theme_group.children()
+    ) == 0:
+
+        main_group.removeChildNode(
+            theme_group
+        )
+
+
+# ============================================================
+# СКРЫВАЕМ ИСХОДНЫЕ DXF-СЛОИ
+# ============================================================
+
+for layer in selected:
+
+    node = root.findLayer(
+        layer.id()
+    )
+
+    if node is not None:
+
+        node.setItemVisibilityChecked(
+            False
+        )
+
+
+# ============================================================
+# ДЕРЕВО СЛОЁВ
+# ============================================================
+
+main_group.setExpanded(
+    True
+)
+
+
+for node in main_group.children():
+
+    try:
+        node.setExpanded(
+            False
+        )
+
+    except Exception:
+        pass
+
+
+iface.mapCanvas().refresh()
+
+
+# ============================================================
+# ИТОГ
+# ============================================================
+
+print("")
+print("=" * 85)
+print("ГОТОВО")
+print("=" * 85)
+
+print(
+    "GeoPackage:"
+)
+
+print(
+    gpkg_path
+)
+
+print("")
+
+print(
+    "Создано слоёв:",
+    created_count
+)
+
+print("")
+
+print(
+    "Исходные HEX-цвета "
+    "в итоговые поля НЕ записаны."
+)
+
+print(
+    "Исходные CAD-поля "
+    "в итоговые слои НЕ перенесены."
+)
+
+print("")
+
+print(
+    "Линии / полигоны:"
+)
+
+print(
+    "  class_code"
+)
+
+print(
+    "  class_name"
+)
+
+print("")
+
+print(
+    "Подписи:"
+)
+
+print(
+    "  class_code"
+)
+
+print(
+    "  class_name"
+)
+
+print(
+    "  text"
+)
+
+print("")
+
+print(
+    "Цвета сведены к 8 "
+    "нормализованным группам."
+)
+
+print("=" * 85)
