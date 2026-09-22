@@ -1,0 +1,320 @@
+файл 1
+create table if not exists "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" (
+	id uuid NOT null default uuid_generate_v4(),
+	project_id uuid,
+	geom public.geometry(multipolygon, 3857) null,
+	class_code varchar(10) null,
+	class_name varchar(100) null,
+	naim text null,
+	vid_zon varchar(255) NULL,
+	plosh_pokr float8 NULL,
+	sub_rf varchar(255) NULL,
+	munc_obrzv varchar(255) NULL,
+	nomer_rees varchar(255) NULL,
+	nomer_poys varchar(255) NULL,
+	dzo varchar(5) null,
+	CONSTRAINT "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav_pkey" PRIMARY KEY (id)
+);
+
+-- id, project_id, geom, class_code, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys
+
+-- Динамически создаём столбец ДО/ДЗО (на всякий) и заполняем его --
+
+do $$
+declare
+	codes text[] := ARRAY['AGAZ', 'ASPG2', 'OGHK', 'TSNG', 'YGEO', 'YSPG', 'YUNG'];
+	code text;
+begin
+	foreach code in array codes 
+	loop
+		execute format('ALTER TABLE public."ZM_ZonySOsobUslovIspolTerrit_A_%s" ADD COLUMN dzo varchar(5) NULL;', code); 
+		execute format('UPDATE public."ZM_ZonySOsobUslovIspolTerrit_A_%s" set dzo = %L;', code, code);
+		execute format('INSERT INTO public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+			(geom, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys, dzo)
+			select geom, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, trim(nomer_rees) as nomer_rees, nomer_poys, dzo
+			from public."ZM_ZonySOsobUslovIspolTerrit_A_%s";', code);
+	end loop;
+end $$;
+
+-- обновление наименований из справочников --
+-- zouit_agaz_temp zouit_aspg2_temp zouit_ygeo_temp zouit_tsng_temp zouit_yung_temp
+-- AGAZ --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set naim = trim(d.naim)
+from zouit_agaz_temp d
+where t.nomer_rees = d.nomer_rees;
+
+-- ASPG2 --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set naim = trim(d.naim)
+from zouit_aspg2_temp d
+where t.nomer_rees = d.nomer_rees;
+
+-- TSNG --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set naim = trim(d.naim), vid_zon = trim(d.vid_zon)
+from zouit_tsng_temp d
+where t.nomer_rees = d.nomer_rees;
+
+-- YGEO --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set naim = trim(d.naim)
+from zouit_ygeo_temp d
+where t.nomer_rees = d.nomer_rees;
+
+-- YSPG --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set vid_zon = 'Охранная зона геодезических пунктов государственной геодезической сети, нивелирных пунктов государственной нивелирной сети и гравиметрических пунктов государственной гравиметрической сети'
+where nomer_rees = '89:03-6.2286';
+
+-- YUNG --
+update "ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set naim = trim(d.naim), vid_zon = trim(d.vid_zon)
+from zouit_yung_temp d
+where t.nomer_rees = d.nomer_rees;
+
+-- нормализация названий классификатора --
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set class_name = trim(class_name);
+
+-- заполнение кодов классификатора --
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t
+set class_code = v.code
+from (
+	values
+		('1100201001', 'ЗОУИТ объектов культурного наследия'),
+		('1100201002', 'ЗОУИТ объектов энергетики связи транспорта'),
+		('1100201003', 'ЗОУИТ природных территорий'),
+		('1100201004', 'ЗОУИТ охраняемых объектов и безопасности'),
+		('1100201005', 'Иные ЗОУИТ')
+) as v(code, name)
+where t.class_name = v.name;
+
+select distinct class_code from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+
+-- проверка площади покрытия --
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set plosh_pokr = null
+where dzo = 'ASPG2' and plosh_pokr = 0;
+
+select dzo, naim, plosh_pokr from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+where (plosh_pokr is null and dzo != 'ASPG2') or plosh_pokr <= 0;
+
+-- sub_rf --
+select distinct sub_rf from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set sub_rf = replace(sub_rf, chr(1), ''); -- remove ''
+
+-- munc_obrzv --
+select distinct munc_obrzv from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set munc_obrzv = replace(munc_obrzv, chr(1), ''); -- remove ''
+
+-- nomer_rees --
+select distinct nomer_rees from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+where nomer_rees like ' ';
+
+-- nomer_poys --
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_poys = null
+where dzo = 'TSNG' and nomer_poys = '0';
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_poys = 'первый пояс'
+where nomer_poys = 'првый пояс';
+
+select distinct nomer_poys from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+
+-- total check --
+select distinct class_name from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+select distinct naim from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	where naim like ' %' or naim like '% ';
+select distinct vid_zon from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	where vid_zon like ' %' or vid_zon like '% ';
+
+select distinct dzo, nomer_rees, plosh_pokr from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	order by plosh_pokr asc;
+select distinct dzo, nomer_rees, plosh_pokr from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	order by plosh_pokr desc;
+
+select distinct sub_rf from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+select distinct munc_obrzv from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+select distinct nomer_rees from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	where nomer_rees like ' %' or nomer_rees like '% ';
+select distinct nomer_poys from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav";
+
+-- remove temp tables --
+-- zouit_agaz_temp zouit_aspg2_temp zouit_ygeo_temp zouit_tsng_temp zouit_yung_temp
+drop table zouit_agaz_temp;
+drop table zouit_aspg2_temp;
+drop table zouit_ygeo_temp;
+drop table zouit_tsng_temp;
+drop table zouit_yung_temp;
+
+-- Исправление замечаний --
+select t1.naim, t1.nomer_rees, count(*), STRING_AGG(t1.dzo, ', ') from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t1
+join public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" t2 on st_dwithin(t1.geom, t2.geom, 0.00001)
+	and t1.nomer_rees = t2.nomer_rees and t1.id <> t2.id
+group by t1.naim, t1.nomer_rees;
+
+delete from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+where nomer_rees = '89:03-6.3635' and dzo = 'YSPG';
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_rees = '89:05-6.4033'
+where id = (
+	select id
+	from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+	where nomer_rees = '89:05-6.4044'
+	limit 1
+);
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set vid_zon = 'Охранная зона объектов электроэнергетики (объектов электросетевого хозяйства и объектов по производству электрической энергии)'
+where vid_zon like 'Охранная зона объектов электроэнергетики%';
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_rees = replace(nomer_rees, chr(1), ''); -- remove ''
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_rees = '89:05-6.4035'
+where nomer_rees = '89:05-6.4033' and naim = 'Охранная зона объекта электросетевого хозяйства - ВЛ-6 кВ №1 к Кусту скважин 9н';
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set vid_zon = 'Зоны санитарной охраны источников питьевого и хозяйственно-бытового водоснабжения, а также устанавливаемые в случаях, предусмотренных Водным кодексом Российской Федерации, в отношении подземных водных объектов зоны специальной охраны'
+where vid_zon like 'Зоны санитарной охраны%';
+
+select distinct nomer_poys from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+order by nomer_poys;
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_poys = 'Первый пояс'
+where nomer_poys in ('1 пояс', '1', 'первый пояс');
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_poys = 'Второй пояс'
+where nomer_poys in ('2', 'второй пояс');
+
+update public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"
+set nomer_poys = 'Третий пояс'
+where nomer_poys in ('3', 'третий пояс');
+
+файл2
+-- Заполнение bgd_PAO
+-- id, project_id, geom, class_code, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys
+do $$
+declare
+	v_source_table text := 'ZM_ZonySOsobUslovIspolTerrit_A_klass_prav';
+	v_target_table text  := 'ZM_ZonySOsobUslovIspolTerrit_A';
+	v_db text;
+	v_conn_str text;
+	v_sql text;
+	v_count text;
+	remote_sql text;
+	dblink_sql text;
+begin
+	v_conn_str := format('host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=normalize user=admin password=admin123', '');
+	v_sql := format('
+		insert into %I (id, project_id, geom, class_code, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys)
+		select id, project_id, geom, class_code, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys
+		from dblink(''%s'', 
+			''select id, project_id, geom, class_code, class_name, naim, vid_zon, plosh_pokr, sub_rf, munc_obrzv, nomer_rees, nomer_poys
+			from ready.%I'')
+		as t(id uuid, project_id uuid, geom geometry(MultiPolygon,3857), class_code character varying(10), class_name character varying(100),
+			naim text, vid_zon varchar(255), plosh_pokr float8, sub_rf varchar(255), munc_obrzv varchar(255), nomer_rees varchar(255),
+			nomer_poys varchar(255))',
+		v_target_table,
+		v_conn_str,
+		v_source_table
+	);
+
+	remote_sql := format('select dblink_exec(
+		''host=tmn-nst-test-db.tm.novatek.int port=5432 dbname=bgd_PAO user=admin password=admin123'', 
+		%L);', v_sql);
+			
+	raise notice 'SQL for db %: %', v_db, v_sql;
+	
+	begin 
+		execute remote_sql;
+		get diagnostics v_count = ROW_COUNT;
+		raise notice 'Inserted % rows into %', v_count, v_db;
+
+	exception when others then
+		raise warning 'Error inserting into %: %', v_db, sqlerrm;
+	end;
+end $$;
+
+файл3
+-- заполнение справочника ZOUIT в nsi --
+
+-- в РОиМД не указан, но пока оставляем plosh_zu allow null
+--alter table public."ZonesWithSpecialConditionsForUseOfTerritories" alter column plosh_zu drop not null;
+-- в РОиМД указан как необязательный
+alter table public."ZonesWithSpecialConditionsForUseOfTerritories" alter column plosh_pokr drop not null;
+
+-- заполнение простых значений --
+insert into public."ZonesWithSpecialConditionsForUseOfTerritories"
+(id, naim, plosh_pokr, nomer_rees, nomer_poys)
+select n.id, n.naim, n.plosh_pokr, n.nomer_rees, n.nomer_poys
+from dblink('dbname=normalize',
+	'select id, naim, plosh_pokr, nomer_rees, nomer_poys
+	 from ready."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav"')
+as n(id uuid, naim text, plosh_pokr float8, nomer_rees character varying(255), nomer_poys character varying(255));
+
+-- заполнение значений vid_zon на uuid --
+-- заполнение справочника с видами зон --
+insert into public."TypesOfZonesWithSpecialConditionsUse" (id, naim)
+select uuid_generate_v4(), n.vid_zon 
+from dblink('dbname=normalize',
+	'select distinct vid_zon
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where vid_zon is not null')
+	as n(vid_zon varchar(255))
+left join public."TypesOfZonesWithSpecialConditionsUse" t on t.naim = n.vid_zon
+where t.naim is null;
+
+-- заполнение значений vid_zon на uuid --
+update public."ZonesWithSpecialConditionsForUseOfTerritories" ld
+set vid_zon = p.id
+from dblink('dbname=normalize',
+	'select id, vid_zon
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where vid_zon is not null')
+as n(id uuid, vid_zon varchar(255))
+join public."TypesOfZonesWithSpecialConditionsUse" p on n.vid_zon = p.naim
+where ld.id  = n.id;
+
+-- заполнение значений sub_rf на uuid --
+select n.sub_rf
+from dblink('dbname=normalize',
+	'select id, sub_rf
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where sub_rf is not null')
+as n(id uuid, sub_rf varchar(255))
+left join public."FederalSubjectsOfRussia" p on n.sub_rf = p."SparkRegionName"
+where p is null;
+
+update public."ZonesWithSpecialConditionsForUseOfTerritories" ld
+set sub_rf = p.id
+from dblink('dbname=normalize',
+	'select id, sub_rf
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where sub_rf is not null')
+as n(id uuid, sub_rf varchar(255))
+join public."FederalSubjectsOfRussia" p on n.sub_rf = p."SparkRegionName"
+where ld.id  = n.id;
+
+-- заполнение значений munc_obrzv на uuid --
+select n.munc_obrzv
+from dblink('dbname=normalize',
+	'select id, munc_obrzv
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where munc_obrzv is not null')
+as n(id uuid, munc_obrzv varchar(255))
+left join public."AllRussianClassifierOfObjectsOfAdministrativeTerritorialDivisio" p on n.munc_obrzv = p.naim
+where p is null;
+
+update public."ZonesWithSpecialConditionsForUseOfTerritories" ld
+set munc_obrzv = p.id
+from dblink('dbname=normalize',
+	'select id, munc_obrzv
+	 from public."ZM_ZonySOsobUslovIspolTerrit_A_klass_prav" where munc_obrzv is not null')
+as n(id uuid, munc_obrzv varchar(255))
+join public."AllRussianClassifierOfObjectsOfAdministrativeTerritorialDivisio" p on n.munc_obrzv = p.naim
+where ld.id  = n.id;
