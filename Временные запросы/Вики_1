@@ -1,0 +1,76 @@
+__NOTOC__
+
+<div style="font-size:16px; color:#4f5b66; margin:8px 0 24px 0;">
+Инструкции, обучение и полезные материалы для работы с геоинформационной системой
+</div>
+
+<table style="width:100%; border-collapse:separate; border-spacing:0 0;">
+<tr>
+
+<td style="width:32%; vertical-align:top; padding:0 10px 0 0;">
+<div style="min-height:155px; box-sizing:border-box;
+background:#ffffff; border:1px solid #d9e1e7;
+border-top:4px solid #1769aa; border-radius:7px;
+padding:20px 22px;">
+
+<div style="font-size:20px; font-weight:bold; margin-bottom:10px;">
+Начало работы
+</div>
+
+<div style="color:#555; line-height:1.45; min-height:48px;">
+Получение доступа и основные сведения для начала работы с системой.
+</div>
+
+<div style="margin-top:15px;">
+[[#Организация доступа|'''Перейти →''']]
+</div>
+
+</div>
+</td>
+
+
+<td style="width:36%; vertical-align:top; padding:0 10px;">
+<div style="min-height:155px; box-sizing:border-box;
+background:#ffffff; border:1px solid #d9e1e7;
+border-top:4px solid #1769aa; border-radius:7px;
+padding:20px 22px;">
+
+<div style="font-size:20px; font-weight:bold; margin-bottom:10px;">
+Обучение
+</div>
+
+<div style="color:#555; line-height:1.45; min-height:48px;">
+Видеоуроки и пошаговые материалы по работе с Геопорталом.
+</div>
+
+<div style="margin-top:15px;">
+[[#Обучение|'''Начать обучение →''']]
+</div>
+
+</div>
+</td>
+
+
+<td style="width:32%; vertical-align:top; padding:0 0 0 10px;">
+<div style="min-height:155px; box-sizing:border-box;
+background:#ffffff; border:1px solid #d9e1e7;
+border-top:4px solid #1769aa; border-radius:7px;
+padding:20px 22px;">
+
+<div style="font-size:20px; font-weight:bold; margin-bottom:10px;">
+Документация
+</div>
+
+<div style="color:#555; line-height:1.45; min-height:48px;">
+Руководства пользователя и документация по модулям системы.
+</div>
+
+<div style="margin-top:15px;">
+[[#Документация|'''Открыть документацию →''']]
+</div>
+
+</div>
+</td>
+
+</tr>
+</table>
