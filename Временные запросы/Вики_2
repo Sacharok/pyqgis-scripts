@@ -1,0 +1,405 @@
+<div style="
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px;
+margin:20px 0;
+">
+
+<div style="
+font-size:20px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Выбор стрелки
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+margin-bottom:18px;
+">
+Слева — закрытое состояние, справа — открытое.
+</div>
+
+
+<table style="
+width:100%;
+border-collapse:collapse;
+">
+
+
+<!-- ВАРИАНТ 1 -->
+
+<tr>
+
+<td style="
+width:150px;
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 1
+</td>
+
+<td style="
+width:80px;
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:'Segoe UI Symbol',Arial,sans-serif;
+font-size:30px;
+font-weight:400;
+color:#526873;
+">⌄</span>
+
+</td>
+
+<td style="
+width:80px;
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:'Segoe UI Symbol',Arial,sans-serif;
+font-size:30px;
+font-weight:400;
+color:#526873;
+">⌃</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Лёгкий широкий шеврон
+</td>
+
+</tr>
+
+
+<!-- ВАРИАНТ 2 -->
+
+<tr>
+
+<td style="
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 2
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:Arial,sans-serif;
+font-size:27px;
+font-weight:400;
+color:#526873;
+">∨</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:Arial,sans-serif;
+font-size:27px;
+font-weight:400;
+color:#526873;
+">∧</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Строгий геометричный
+</td>
+
+</tr>
+
+
+<!-- ВАРИАНТ 3 -->
+
+<tr>
+
+<td style="
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 3
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:Arial,sans-serif;
+font-size:27px;
+font-weight:400;
+color:#526873;
+">⋁</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-family:Arial,sans-serif;
+font-size:27px;
+font-weight:400;
+color:#526873;
+">⋀</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Текущий вариант
+</td>
+
+</tr>
+
+
+<!-- ВАРИАНТ 4 -->
+
+<tr>
+
+<td style="
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 4
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:22px;
+color:#526873;
+">▾</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:22px;
+color:#526873;
+">▴</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Компактный заполненный
+</td>
+
+</tr>
+
+
+<!-- ВАРИАНТ 5 -->
+
+<tr>
+
+<td style="
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 5
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:18px;
+color:#526873;
+">▼</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:18px;
+color:#526873;
+">▲</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Более заметный и тяжёлый
+</td>
+
+</tr>
+
+
+<!-- ВАРИАНТ 6 -->
+
+<tr>
+
+<td style="
+border:none;
+padding:12px 10px;
+font-weight:700;
+">
+Вариант 6
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:25px;
+font-weight:300;
+color:#526873;
+">＋</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+text-align:center;
+">
+
+<span style="
+display:inline-flex;
+align-items:center;
+justify-content:center;
+width:42px;
+height:42px;
+font-size:25px;
+font-weight:300;
+color:#526873;
+">−</span>
+
+</td>
+
+<td style="
+border:none;
+padding:12px 10px;
+color:#71808B;
+">
+Альтернатива стрелкам
+</td>
+
+</tr>
+
+</table>
+
+</div>
