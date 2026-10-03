@@ -1,0 +1,27 @@
+<td style="
+width:46px;
+border:none;
+vertical-align:middle;
+text-align:center;
+padding:0;
+">
+
+<span style="
+display:inline-block;
+width:32px;
+height:32px;
+line-height:30px;
+text-align:center;
+border-radius:50%;
+background:#EEF8FB;
+border:1px solid #D8EBF2;
+color:#1687B8;
+font-size:19px;
+font-weight:700;
+">
+
+<span class="mw-collapsible-text">▾</span>
+
+</span>
+
+</td>
