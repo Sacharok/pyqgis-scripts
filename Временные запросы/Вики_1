@@ -45,13 +45,12 @@ margin-bottom:22px;
 <div style="
 display:inline-block;
 background:#1687B8;
-color:#ffffff;
 padding:12px 22px;
 border-radius:8px;
 font-size:16px;
 font-weight:700;
 ">
-Открыть Геопортал →
+[ССЫЛКА_НА_ГЕОПОРТАЛ <span style="color:#ffffff;">'''Открыть Геопортал →'''</span>]
 </div>
 
 </td>
@@ -237,8 +236,6 @@ margin-bottom:30px;
 <tr>
 
 
-<!-- ПОИСК И МАРШРУТ -->
-
 <td style="
 width:25%;
 vertical-align:top;
@@ -275,8 +272,6 @@ min-height:56px;
 
 </td>
 
-
-<!-- ДОСТУП -->
 
 <td style="
 width:25%;
@@ -315,8 +310,6 @@ min-height:56px;
 </td>
 
 
-<!-- ТРЕБОВАНИЯ -->
-
 <td style="
 width:25%;
 vertical-align:top;
@@ -353,8 +346,6 @@ min-height:56px;
 
 </td>
 
-
-<!-- ПОДДЕРЖКА -->
 
 <td style="
 width:25%;
@@ -427,8 +418,6 @@ margin-top:4px;
 </div>
 
 
-<!-- УРОК 1 -->
-
 <span id="lesson1"></span>
 
 <div style="
@@ -472,19 +461,17 @@ margin-bottom:14px;
 <td style="
 border:none;
 padding:0 28px 0 0;
-color:#1769AA;
 font-weight:700;
 ">
-Смотреть видео →
+[ССЫЛКА_УРОК_1 Смотреть видео →]
 </td>
 
 <td style="
 border:none;
 padding:0;
-color:#1769AA;
 font-weight:700;
 ">
-Открыть инструкцию →
+[ССЫЛКА_ИНСТРУКЦИЯ_УРОК_1 Открыть инструкцию →]
 </td>
 
 </tr>
@@ -561,12 +548,7 @@ margin-bottom:10px;
 Основное руководство пользователя Геопортала.
 </div>
 
-<div style="
-color:#1769AA;
-font-weight:700;
-">
-Открыть руководство →
-</div>
+'''[[:Файл:Руководство_пользователя_(ИС_Геопортал).docx|Открыть руководство →]]'''
 
 </td>
 
@@ -598,12 +580,7 @@ margin-bottom:10px;
 Руководство пользователя модуля ГТЛ.
 </div>
 
-<div style="
-color:#1769AA;
-font-weight:700;
-">
-Открыть руководство →
-</div>
+'''[[:Файл:Руководство_пользователя_Модуль_ГТЛ.DOCX|Открыть руководство →]]'''
 
 </td>
 
@@ -639,12 +616,7 @@ margin-bottom:10px;
 Руководство по работе с модулем оформления карт.
 </div>
 
-<div style="
-color:#1769AA;
-font-weight:700;
-">
-Открыть руководство →
-</div>
+'''[[:Файл:Руководство_пользователя_Модуль_Карт-дизайнер.docx|Открыть руководство →]]'''
 
 </td>
 
@@ -675,12 +647,7 @@ margin-bottom:10px;
 Руководство пользователя каталога пространственных данных.
 </div>
 
-<div style="
-color:#1769AA;
-font-weight:700;
-">
-Открыть руководство →
-</div>
+'''[[:Файл:Руководство_пользователя_Модуль_Каталог_пространственных_данных.DOCX|Открыть руководство →]]'''
 
 </td>
 
@@ -706,17 +673,16 @@ margin-bottom:8px;
 Дополнительные материалы
 </div>
 
-<div style="
-color:#1769AA;
-margin-bottom:5px;
-">
-'''Архив с шаблонами →'''
+<div style="margin-bottom:6px;">
+'''[[:Файл:Шаблоны.zip|Архив с шаблонами →]]'''
 </div>
 
-<div style="
-color:#1769AA;
-">
-'''Доклад об информационной системе «Геопортал» →'''
+<div style="margin-bottom:6px;">
+'''[[:Файл:ГИС_доклад_2_(004).pptx|Доклад об информационной системе «Геопортал» →]]'''
+</div>
+
+<div>
+'''[https://academy.cloud.novatek.ru/content/info/5548 Инструкция в видео формате →]'''
 </div>
 
 </div>
@@ -757,9 +723,7 @@ margin-top:4px;
 <div class="mw-collapsible mw-collapsed"
      data-expandtext="▼"
      data-collapsetext="▲"
-     style="
-     margin:0 0 12px 0;
-     ">
+     style="margin:0 0 8px 0;">
 
 <div class="mw-collapsible-toggle"
      style="
@@ -775,10 +739,7 @@ margin-top:4px;
      text-align:left;
      ">
 
-<table style="
-width:100%;
-border-collapse:collapse;
-">
+<table style="width:100%; border-collapse:collapse;">
 <tr>
 
 <td style="
@@ -787,11 +748,8 @@ border:none;
 vertical-align:middle;
 padding:0 14px 0 0;
 ">
-
 [[Файл:Geoportal_docs.png|40px|link=|alt=Краткий паспорт]]
-
 </td>
-
 
 <td style="
 border:none;
@@ -817,7 +775,6 @@ margin-top:3px;
 
 </td>
 
-
 <td style="
 width:52px;
 height:52px;
@@ -855,20 +812,21 @@ padding:0;
      border:1px solid #E1E8EC;
      border-top:none;
      border-radius:0 0 11px 11px;
-     padding:16px 18px 18px 18px;
-     color:#5F6D78;
-     line-height:1.55;
+     padding:18px 20px;
+     color:#4F5D67;
+     line-height:1.65;
      ">
 
 <div style="
-padding:15px 18px;
+padding:17px 19px;
 background:#F7FAFB;
 border-left:4px solid #1687B8;
 ">
 
-'''Наименование:''' Производственная информационная система «Геоинформационный портал»
-
-<!-- СЮДА ВСТАВИТЬ ОСТАЛЬНОЙ ТЕКСТ КРАТКОГО ПАСПОРТА -->
+'''Наименование:''' Производственная информационная система «Геоинформационный портал»<br>
+'''Краткое наименование:''' ИС «ГЕОпортал» (NST, NeoPortal, ЦИС)<br>
+'''Владелец:''' ООО «НОВАТЭК-Цифровая Энергия»<br>
+'''Администратор:''' Управление эксплуатации информационных систем и технологий в г. Тюмени
 
 </div>
 
@@ -884,9 +842,7 @@ border-left:4px solid #1687B8;
 <div class="mw-collapsible mw-collapsed"
      data-expandtext="▼"
      data-collapsetext="▲"
-     style="
-     margin:0 0 12px 0;
-     ">
+     style="margin:0 0 8px 0;">
 
 <div class="mw-collapsible-toggle"
      style="
@@ -902,10 +858,7 @@ border-left:4px solid #1687B8;
      text-align:left;
      ">
 
-<table style="
-width:100%;
-border-collapse:collapse;
-">
+<table style="width:100%; border-collapse:collapse;">
 <tr>
 
 <td style="
@@ -914,11 +867,8 @@ border:none;
 vertical-align:middle;
 padding:0 14px 0 0;
 ">
-
 [[Файл:Geoportal_start.png|40px|link=|alt=Назначение и функции]]
-
 </td>
-
 
 <td style="
 border:none;
@@ -944,7 +894,6 @@ margin-top:3px;
 
 </td>
 
-
 <td style="
 width:52px;
 height:52px;
@@ -982,21 +931,29 @@ padding:0;
      border:1px solid #E1E8EC;
      border-top:none;
      border-radius:0 0 11px 11px;
-     padding:16px 18px 18px 18px;
+     padding:18px 22px;
      color:#4F5D67;
      line-height:1.55;
      ">
 
 Система предназначена как единое решение для хранения, консолидации, обработки, обмена и работы с геопространственными данными.
 
+<div style="margin-top:14px; margin-bottom:8px;">
 Система реализована на основе отечественных цифровых решений и включает в себя:
+</div>
 
-# Сбор и предоставление геоданных, их визуализацию, анализ и обработку имеющейся информации пользователями.
-# Модуль для минимизации затрат при анализе газотранспортной инфраструктуры и планирования транспортировки газа потребителям.
-# Инструменты для настройки и загрузки данных в геоинформационный портал, включая создание таблиц БГД, настройку визуального отображения объектов, конфигурацию картографических слоёв и загрузку геоданных из векторных форматов.
-# Реестр, предоставляющий возможность просмотра метаданных о картах и картографических слоях, включая информацию об их создателях, и обеспечивающий навигацию с переходом в геоинформационный портал.
-# Хранение нормативно-справочной информации (НСИ) для поддержания актуальности и целостности данных о пространственных объектах.
-# Модуль для администрирования системы, включая управление пользователями, их правами доступа и разграничение прав на пространственные данные и функциональность геоинформационного портала.
+<ol style="
+margin-top:8px;
+padding-left:26px;
+line-height:1.6;
+">
+<li>Сбор и предоставление геоданных, их визуализацию, анализ и обработку имеющейся информации пользователями.</li>
+<li>Модуль для минимизации затрат при анализе газотранспортной инфраструктуры и планирования транспортировки газа потребителям.</li>
+<li>Инструменты для настройки и загрузки данных в геоинформационный портал, включая создание таблиц БГД, настройку визуального отображения объектов, конфигурацию картографических слоёв и загрузку геоданных из векторных форматов.</li>
+<li>Реестр, предоставляющий возможность просмотра метаданных о картах и картографических слоях, включая информацию об их создателях, и обеспечивающий навигацию с переходом в геоинформационный портал.</li>
+<li>Хранение нормативно-справочной информации (НСИ) для поддержания актуальности и целостности данных о пространственных объектах.</li>
+<li>Модуль для администрирования системы, включая управление пользователями, их правами доступа и разграничение прав на пространственные данные и функциональность геоинформационного портала.</li>
+</ol>
 
 </div>
 
@@ -1010,9 +967,7 @@ padding:0;
 <div class="mw-collapsible mw-collapsed"
      data-expandtext="▼"
      data-collapsetext="▲"
-     style="
-     margin:0 0 12px 0;
-     ">
+     style="margin:0 0 8px 0;">
 
 <div class="mw-collapsible-toggle"
      style="
@@ -1028,10 +983,7 @@ padding:0;
      text-align:left;
      ">
 
-<table style="
-width:100%;
-border-collapse:collapse;
-">
+<table style="width:100%; border-collapse:collapse;">
 <tr>
 
 <td style="
@@ -1040,11 +992,8 @@ border:none;
 vertical-align:middle;
 padding:0 14px 0 0;
 ">
-
 [[Файл:Geoportal_access.png|40px|link=|alt=Пользователи системы]]
-
 </td>
-
 
 <td style="
 border:none;
@@ -1070,7 +1019,6 @@ margin-top:3px;
 
 </td>
 
-
 <td style="
 width:52px;
 height:52px;
@@ -1108,12 +1056,31 @@ padding:0;
      border:1px solid #E1E8EC;
      border-top:none;
      border-radius:0 0 11px 11px;
-     padding:16px 18px 18px 18px;
+     padding:18px 22px;
      color:#4F5D67;
      line-height:1.55;
      ">
 
-<!-- СЮДА ВСТАВИТЬ СУЩЕСТВУЮЩИЙ СПИСОК ДО/ДЗО -->
+<ul style="
+margin:0;
+padding-left:22px;
+line-height:1.75;
+">
+<li>ООО «НОВАТЭК Научно-технический центр» (НТЦ)</li>
+<li>ПАО «НОВАТЭК» (Корпоративный центр)</li>
+<li>НОВАТЭК-ТАРКОСАЛЕНЕФТЕГАЗ</li>
+<li>НОВАТЭК-ЮРХАРОВНЕФТЕГАЗ</li>
+<li>Нортгаз</li>
+<li>Арктикгаз</li>
+<li>ОБСКИЙ ГХК</li>
+<li>Ямал СПГ</li>
+<li>ЯМАЛ СПГ РЕСУРС</li>
+<li>ЯРГЕО</li>
+<li>Тернефтегаз</li>
+<li>Арктик СПГ 1</li>
+<li>Арктик СПГ 2</li>
+<li>Арктик СПГ 3</li>
+</ul>
 
 </div>
 
@@ -1131,23 +1098,119 @@ font-size:21px;
 font-weight:700;
 color:#1F2933;
 margin-top:30px;
-padding-bottom:7px;
+padding-bottom:9px;
 border-bottom:1px solid #DEE5E9;
 ">
 Требования к рабочему месту
 </div>
 
-<!-- СЮДА ВСТАВИТЬ СУЩЕСТВУЮЩУЮ ТАБЛИЦУ ТРЕБОВАНИЙ -->
+
+<table style="
+width:100%;
+border-collapse:collapse;
+margin-top:16px;
+background:#ffffff;
+border:1px solid #DDE5E9;
+font-size:14px;
+">
+
+<tr style="
+background:#F3F7F9;
+font-weight:700;
+color:#34434C;
+">
+
+<td style="
+width:6%;
+padding:11px 12px;
+border:1px solid #DDE5E9;
+text-align:center;
+">
+№
+</td>
+
+<td style="
+width:22%;
+padding:11px 12px;
+border:1px solid #DDE5E9;
+">
+Параметр
+</td>
+
+<td style="
+width:36%;
+padding:11px 12px;
+border:1px solid #DDE5E9;
+">
+Минимальные требования
+</td>
+
+<td style="
+width:36%;
+padding:11px 12px;
+border:1px solid #DDE5E9;
+">
+Рекомендуемые разработчиком
+</td>
+
+</tr>
+
+
+<tr>
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">1</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Процессор</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">2 ядра x86-64</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">4 ядра x64</td>
+</tr>
+
+<tr style="background:#FAFCFD;">
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">2</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Оперативная память</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">4 ГБ</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">8 ГБ</td>
+</tr>
+
+<tr>
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">3</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Дисковая память</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">50 ГБ SSD</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">256 ГБ SSD</td>
+</tr>
+
+<tr style="background:#FAFCFD;">
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">4</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Сеть</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">10 Мбит/с</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">100 Мбит/с</td>
+</tr>
+
+<tr>
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">5</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Операционная система</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Windows 7 / Astra Linux 1.7 / РедОС 7.3</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Windows 10 / Astra Linux 1.8 / РедОС 8</td>
+</tr>
+
+<tr style="background:#FAFCFD;">
+<td style="padding:10px 12px; border:1px solid #DDE5E9; text-align:center;">6</td>
+<td style="padding:10px 12px; border:1px solid #DDE5E9;">Версия браузера</td>
+<td colspan="2" style="padding:10px 12px; border:1px solid #DDE5E9;">
+Google Chrome версии 130.* / Яндекс Браузер для организаций версии 24.7.
+</td>
+</tr>
+
+</table>
+
 
 <div style="
-margin-top:11px;
+margin-top:14px;
 padding:15px 18px;
 background:#F7FAFB;
 border-left:4px solid #1687B8;
 line-height:1.5;
 ">
 
-Для взаимодействия с системой необходимо использовать современный браузер, например Google Chrome, Microsoft Edge или Яндекс.Браузер. Версия браузера на момент подключения к web-интерфейсу должна быть не старше 2-х лет.
+Для взаимодействия с системой необходимо использовать любой современный браузер, например Google Chrome, Microsoft Edge, Яндекс.Браузер. Версия браузера на момент подключения к web-интерфейсу должна быть не старше 2-х лет.
 
 </div>
 
@@ -1163,7 +1226,7 @@ font-size:21px;
 font-weight:700;
 color:#1F2933;
 margin-top:30px;
-padding-bottom:7px;
+padding-bottom:9px;
 border-bottom:1px solid #DEE5E9;
 ">
 Организация доступа
@@ -1173,8 +1236,8 @@ border-bottom:1px solid #DEE5E9;
 padding:16px 19px;
 background:#F7FAFB;
 border-left:4px solid #1687B8;
-margin-top:11px;
-margin-bottom:13px;
+margin-top:12px;
+margin-bottom:14px;
 line-height:1.5;
 ">
 
@@ -1182,11 +1245,22 @@ line-height:1.5;
 
 </div>
 
+<div style="margin-bottom:8px;">
 Для получения доступа необходимо выполнить следующие шаги:
+</div>
 
-# Войти в браузере в '''Систему предоставления доступа'''.
-# Выбрать '''«Запрос на предоставление доступа к системе/сервису»'''.
-# Выбрать '''«Сервисы» → «Централизованные системы» → «ГеоПортал»'''.
+<ol style="
+padding-left:28px;
+line-height:1.65;
+">
+
+<li>Войти в браузере в '''[https://spd-core01.cloud.novatek.ru/ Систему предоставления доступа]'''.</li>
+
+<li>Выбрать: '''«Запрос на предоставление доступа к системе/сервису»'''.</li>
+
+<li>Выбрать: '''«Сервисы» → «Централизованные системы» → «ГеоПортал»'''.</li>
+
+</ol>
 
 
 <!-- ========================================================= -->
@@ -1199,8 +1273,8 @@ line-height:1.5;
 font-size:21px;
 font-weight:700;
 color:#1F2933;
-margin-top:28px;
-padding-bottom:7px;
+margin-top:30px;
+padding-bottom:9px;
 border-bottom:1px solid #DEE5E9;
 ">
 Техническая поддержка
@@ -1210,9 +1284,50 @@ border-bottom:1px solid #DEE5E9;
 padding:16px 19px;
 background:#F7FAFB;
 border-left:4px solid #1687B8;
-margin-top:11px;
-margin-bottom:13px;
+margin-top:12px;
+margin-bottom:14px;
 line-height:1.5;
 ">
 
-Техническая поддержка пол
+Техническая поддержка пользователей осуществляется работниками Управления эксплуатации информационных систем и технологий в г. Тюмени ООО «НОВАТЭК – Цифровая Энергия» путём подачи заявок через Систему поддержки пользователей «НОВАСЕРВИС».
+
+</div>
+
+<div style="margin-bottom:8px;">
+Для подачи заявки необходимо:
+</div>
+
+<ol style="
+padding-left:28px;
+line-height:1.65;
+">
+
+<li>Войти в браузере в '''[ССЫЛКА_НОВАСЕРВИС «НОВАСЕРВИС»]'''.</li>
+
+<li>Выбрать: '''«Информационные системы» → «Геоинформационный портал (NeoPortal)»'''.</li>
+
+</ol>
+
+
+<!-- ========================================================= -->
+<!-- НИЖНЯЯ НАВИГАЦИЯ                                          -->
+<!-- ========================================================= -->
+
+<div style="
+margin-top:32px;
+padding:16px 20px;
+background:#F3F8FA;
+border-radius:8px;
+text-align:center;
+font-size:14px;
+">
+
+[[#training|'''Обучение''']]
+&nbsp;&nbsp;•&nbsp;&nbsp;
+[[#documentation|'''Документация''']]
+&nbsp;&nbsp;•&nbsp;&nbsp;
+[[#access|'''Получение доступа''']]
+&nbsp;&nbsp;•&nbsp;&nbsp;
+[[#support|'''Техническая поддержка''']]
+
+</div>
