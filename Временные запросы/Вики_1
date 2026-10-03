@@ -1,0 +1,1218 @@
+__NOTOC__
+
+<!-- ========================================================= -->
+<!-- ГЛАВНЫЙ ЭКРАН                                             -->
+<!-- ========================================================= -->
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:0;
+background:#F3F8FA;
+border:1px solid #E1EBEF;
+border-radius:16px;
+margin:6px 0 26px 0;
+overflow:hidden;
+">
+<tr>
+
+<td style="
+width:45%;
+vertical-align:middle;
+padding:36px 20px 36px 34px;
+border:none;
+">
+
+<div style="
+font-size:34px;
+font-weight:700;
+color:#1F2933;
+line-height:1.15;
+margin-bottom:12px;
+">
+Геопортал
+</div>
+
+<div style="
+font-size:18px;
+line-height:1.5;
+color:#5F6D78;
+margin-bottom:22px;
+">
+Пространственные данные, инструменты, обучение и материалы для работы в одном месте.
+</div>
+
+<div style="
+display:inline-block;
+background:#1687B8;
+color:#ffffff;
+padding:12px 22px;
+border-radius:8px;
+font-size:16px;
+font-weight:700;
+">
+Открыть Геопортал →
+</div>
+
+</td>
+
+
+<td style="
+width:55%;
+vertical-align:middle;
+text-align:center;
+padding:10px 14px 6px 4px;
+border:none;
+">
+
+[[Файл:Geoportal_hero-1.png|580px|link=|alt=Геопортал]]
+
+</td>
+
+</tr>
+</table>
+
+
+<!-- ========================================================= -->
+<!-- ОСНОВНЫЕ РАЗДЕЛЫ                                          -->
+<!-- ========================================================= -->
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:12px;
+margin-bottom:28px;
+">
+<tr>
+
+
+<!-- НАЧАЛО РАБОТЫ -->
+
+<td style="
+width:33.33%;
+vertical-align:top;
+padding:24px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+">
+
+[[Файл:Geoportal_start.png|80px|link=|alt=Начало работы]]
+
+<div style="
+font-size:20px;
+font-weight:700;
+color:#1F2933;
+margin-top:14px;
+margin-bottom:8px;
+">
+Начало работы
+</div>
+
+<div style="
+color:#66727D;
+line-height:1.5;
+min-height:50px;
+">
+Получение доступа и основные сведения для начала работы с системой.
+</div>
+
+<div style="margin-top:18px;">
+[[#access|'''Перейти →''']]
+</div>
+
+</td>
+
+
+<!-- ОБУЧЕНИЕ -->
+
+<td style="
+width:33.33%;
+vertical-align:top;
+padding:24px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+">
+
+[[Файл:Geoportal_training.png|80px|link=|alt=Обучение]]
+
+<div style="
+font-size:20px;
+font-weight:700;
+color:#1F2933;
+margin-top:14px;
+margin-bottom:8px;
+">
+Обучение
+</div>
+
+<div style="
+color:#66727D;
+line-height:1.5;
+min-height:50px;
+">
+Видеоуроки и пошаговые материалы по работе с Геопорталом.
+</div>
+
+<div style="margin-top:18px;">
+[[#training|'''Начать обучение →''']]
+</div>
+
+</td>
+
+
+<!-- ДОКУМЕНТАЦИЯ -->
+
+<td style="
+width:33.33%;
+vertical-align:top;
+padding:24px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+">
+
+[[Файл:Geoportal_docs.png|80px|link=|alt=Документация]]
+
+<div style="
+font-size:20px;
+font-weight:700;
+color:#1F2933;
+margin-top:14px;
+margin-bottom:8px;
+">
+Документация
+</div>
+
+<div style="
+color:#66727D;
+line-height:1.5;
+min-height:50px;
+">
+Руководства пользователя и документация по модулям системы.
+</div>
+
+<div style="margin-top:18px;">
+[[#documentation|'''Открыть документацию →''']]
+</div>
+
+</td>
+
+</tr>
+</table>
+
+
+<!-- ========================================================= -->
+<!-- БЫСТРЫЙ ДОСТУП                                            -->
+<!-- ========================================================= -->
+
+<div style="margin:4px 0 14px 0;">
+
+<div style="
+font-size:25px;
+font-weight:700;
+color:#1F2933;
+">
+Быстрый доступ
+</div>
+
+<div style="
+font-size:14px;
+color:#71808B;
+margin-top:4px;
+">
+Часто используемые действия и полезная информация
+</div>
+
+</div>
+
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:10px;
+margin-bottom:30px;
+">
+<tr>
+
+
+<!-- ПОИСК И МАРШРУТ -->
+
+<td style="
+width:25%;
+vertical-align:top;
+padding:18px;
+background:#F9FBFC;
+border:1px solid #E3EAEE;
+border-radius:10px;
+">
+
+[[Файл:Geoportal_search_route.png|56px|link=|alt=Поиск объекта и построение маршрута]]
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-top:10px;
+margin-bottom:6px;
+">
+Поиск объекта и маршрут
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+min-height:56px;
+">
+Поиск объектов на карте и построение маршрута между выбранными точками.
+</div>
+
+<div style="margin-top:12px;">
+[[#lesson1|'''Перейти →''']]
+</div>
+
+</td>
+
+
+<!-- ДОСТУП -->
+
+<td style="
+width:25%;
+vertical-align:top;
+padding:18px;
+background:#F9FBFC;
+border:1px solid #E3EAEE;
+border-radius:10px;
+">
+
+[[Файл:Geoportal_access.png|56px|link=|alt=Получить доступ]]
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-top:10px;
+margin-bottom:6px;
+">
+Получить доступ
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+min-height:56px;
+">
+Порядок оформления доступа к Геопорталу.
+</div>
+
+<div style="margin-top:12px;">
+[[#access|'''Перейти →''']]
+</div>
+
+</td>
+
+
+<!-- ТРЕБОВАНИЯ -->
+
+<td style="
+width:25%;
+vertical-align:top;
+padding:18px;
+background:#F9FBFC;
+border:1px solid #E3EAEE;
+border-radius:10px;
+">
+
+[[Файл:Geoportal_requirements.png|56px|link=|alt=Требования к рабочему месту]]
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-top:10px;
+margin-bottom:6px;
+">
+Требования к рабочему месту
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+min-height:56px;
+">
+Системные требования и рекомендации для пользователей.
+</div>
+
+<div style="margin-top:12px;">
+[[#requirements|'''Перейти →''']]
+</div>
+
+</td>
+
+
+<!-- ПОДДЕРЖКА -->
+
+<td style="
+width:25%;
+vertical-align:top;
+padding:18px;
+background:#F9FBFC;
+border:1px solid #E3EAEE;
+border-radius:10px;
+">
+
+[[Файл:Geoportal_support.png|56px|link=|alt=Техническая поддержка]]
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-top:10px;
+margin-bottom:6px;
+">
+Техническая поддержка
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+min-height:56px;
+">
+Куда обратиться при возникновении вопросов или проблем.
+</div>
+
+<div style="margin-top:12px;">
+[[#support|'''Перейти →''']]
+</div>
+
+</td>
+
+</tr>
+</table>
+
+
+<!-- ========================================================= -->
+<!-- ОБУЧЕНИЕ                                                  -->
+<!-- ========================================================= -->
+
+<span id="training"></span>
+
+<div style="
+margin-top:34px;
+padding-bottom:10px;
+border-bottom:1px solid #DEE5E9;
+">
+
+<div style="
+font-size:25px;
+font-weight:700;
+color:#1F2933;
+">
+Обучение
+</div>
+
+<div style="
+font-size:14px;
+color:#71808B;
+margin-top:4px;
+">
+Короткие видеоуроки и пошаговые материалы по основным возможностям Геопортала
+</div>
+
+</div>
+
+
+<!-- УРОК 1 -->
+
+<span id="lesson1"></span>
+
+<div style="
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:22px 24px;
+margin-top:16px;
+">
+
+<div style="
+font-size:12px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.5px;
+margin-bottom:7px;
+">
+УРОК 1
+</div>
+
+<div style="
+font-size:20px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:7px;
+">
+Поиск объекта и построение маршрута
+</div>
+
+<div style="
+color:#66727D;
+line-height:1.5;
+margin-bottom:14px;
+">
+Поиск объектов на карте и построение маршрута между выбранными точками.
+</div>
+
+<table style="border-collapse:collapse;">
+<tr>
+
+<td style="
+border:none;
+padding:0 28px 0 0;
+color:#1769AA;
+font-weight:700;
+">
+Смотреть видео →
+</td>
+
+<td style="
+border:none;
+padding:0;
+color:#1769AA;
+font-weight:700;
+">
+Открыть инструкцию →
+</td>
+
+</tr>
+</table>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ДОКУМЕНТАЦИЯ                                              -->
+<!-- ========================================================= -->
+
+<span id="documentation"></span>
+
+<div style="
+margin-top:36px;
+padding-bottom:10px;
+border-bottom:1px solid #DEE5E9;
+">
+
+<div style="
+font-size:25px;
+font-weight:700;
+color:#1F2933;
+">
+Документация
+</div>
+
+<div style="
+font-size:14px;
+color:#71808B;
+margin-top:4px;
+">
+Руководства и справочные материалы по работе с модулями системы
+</div>
+
+</div>
+
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:10px;
+margin-top:12px;
+">
+
+<tr>
+
+
+<!-- NEOPORTAL -->
+
+<td style="
+width:50%;
+vertical-align:top;
+padding:19px 21px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+">
+
+<div style="
+font-size:17px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+NeoPortal (Геопортал)
+</div>
+
+<div style="
+color:#71808B;
+margin-bottom:10px;
+">
+Основное руководство пользователя Геопортала.
+</div>
+
+<div style="
+color:#1769AA;
+font-weight:700;
+">
+Открыть руководство →
+</div>
+
+</td>
+
+
+<!-- ГТЛ -->
+
+<td style="
+width:50%;
+vertical-align:top;
+padding:19px 21px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+">
+
+<div style="
+font-size:17px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Газотранспортная логистика
+</div>
+
+<div style="
+color:#71808B;
+margin-bottom:10px;
+">
+Руководство пользователя модуля ГТЛ.
+</div>
+
+<div style="
+color:#1769AA;
+font-weight:700;
+">
+Открыть руководство →
+</div>
+
+</td>
+
+</tr>
+
+
+<tr>
+
+
+<!-- КАРТ-ДИЗАЙНЕР -->
+
+<td style="
+vertical-align:top;
+padding:19px 21px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+">
+
+<div style="
+font-size:17px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Карт-Дизайнер
+</div>
+
+<div style="
+color:#71808B;
+margin-bottom:10px;
+">
+Руководство по работе с модулем оформления карт.
+</div>
+
+<div style="
+color:#1769AA;
+font-weight:700;
+">
+Открыть руководство →
+</div>
+
+</td>
+
+
+<!-- КПД -->
+
+<td style="
+vertical-align:top;
+padding:19px 21px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+">
+
+<div style="
+font-size:17px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Каталог пространственных данных
+</div>
+
+<div style="
+color:#71808B;
+margin-bottom:10px;
+">
+Руководство пользователя каталога пространственных данных.
+</div>
+
+<div style="
+color:#1769AA;
+font-weight:700;
+">
+Открыть руководство →
+</div>
+
+</td>
+
+</tr>
+
+</table>
+
+
+<!-- ДОПОЛНИТЕЛЬНЫЕ МАТЕРИАЛЫ -->
+
+<div style="
+margin-top:10px;
+padding:16px 19px;
+background:#F3F8FA;
+border-left:4px solid #1687B8;
+border-radius:0 8px 8px 0;
+">
+
+<div style="
+font-weight:700;
+margin-bottom:8px;
+">
+Дополнительные материалы
+</div>
+
+<div style="
+color:#1769AA;
+margin-bottom:5px;
+">
+'''Архив с шаблонами →'''
+</div>
+
+<div style="
+color:#1769AA;
+">
+'''Доклад об информационной системе «Геопортал» →'''
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- О СИСТЕМЕ                                                 -->
+<!-- ========================================================= -->
+
+<div style="
+margin-top:38px;
+margin-bottom:16px;
+">
+
+<div style="
+font-size:27px;
+font-weight:700;
+color:#1F2933;
+">
+О системе
+</div>
+
+<div style="
+font-size:14px;
+color:#71808B;
+margin-top:4px;
+">
+Справочная и техническая информация
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- КРАТКИЙ ПАСПОРТ                                           -->
+<!-- ========================================================= -->
+
+<div class="mw-collapsible mw-collapsed"
+     data-expandtext="▼"
+     data-collapsetext="▲"
+     style="
+     margin:0 0 12px 0;
+     ">
+
+<div class="mw-collapsible-toggle"
+     style="
+     float:none;
+     display:block;
+     width:100%;
+     box-sizing:border-box;
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-radius:11px;
+     padding:15px 18px;
+     cursor:pointer;
+     text-align:left;
+     ">
+
+<table style="
+width:100%;
+border-collapse:collapse;
+">
+<tr>
+
+<td style="
+width:48px;
+border:none;
+vertical-align:middle;
+padding:0 14px 0 0;
+">
+
+[[Файл:Geoportal_docs.png|40px|link=|alt=Краткий паспорт]]
+
+</td>
+
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0;
+">
+
+<div style="
+font-size:18px;
+font-weight:700;
+color:#1F2933;
+">
+Краткий паспорт
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+margin-top:3px;
+">
+Основная информация о системе
+</div>
+
+</td>
+
+
+<td style="
+width:52px;
+height:52px;
+border:none;
+vertical-align:middle;
+text-align:center;
+padding:0;
+">
+
+<span class="mw-collapsible-text"
+      style="
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      box-sizing:border-box;
+      width:42px;
+      height:42px;
+      color:#526873;
+      font-size:18px;
+      font-weight:400;
+      line-height:1;
+      ">▼</span>
+
+</td>
+
+</tr>
+</table>
+
+</div>
+
+
+<div class="mw-collapsible-content"
+     style="
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-top:none;
+     border-radius:0 0 11px 11px;
+     padding:16px 18px 18px 18px;
+     color:#5F6D78;
+     line-height:1.55;
+     ">
+
+<div style="
+padding:15px 18px;
+background:#F7FAFB;
+border-left:4px solid #1687B8;
+">
+
+'''Наименование:''' Производственная информационная система «Геоинформационный портал»
+
+<!-- СЮДА ВСТАВИТЬ ОСТАЛЬНОЙ ТЕКСТ КРАТКОГО ПАСПОРТА -->
+
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- НАЗНАЧЕНИЕ И ФУНКЦИИ                                      -->
+<!-- ========================================================= -->
+
+<div class="mw-collapsible mw-collapsed"
+     data-expandtext="▼"
+     data-collapsetext="▲"
+     style="
+     margin:0 0 12px 0;
+     ">
+
+<div class="mw-collapsible-toggle"
+     style="
+     float:none;
+     display:block;
+     width:100%;
+     box-sizing:border-box;
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-radius:11px;
+     padding:15px 18px;
+     cursor:pointer;
+     text-align:left;
+     ">
+
+<table style="
+width:100%;
+border-collapse:collapse;
+">
+<tr>
+
+<td style="
+width:48px;
+border:none;
+vertical-align:middle;
+padding:0 14px 0 0;
+">
+
+[[Файл:Geoportal_start.png|40px|link=|alt=Назначение и функции]]
+
+</td>
+
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0;
+">
+
+<div style="
+font-size:18px;
+font-weight:700;
+color:#1F2933;
+">
+Назначение и функции
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+margin-top:3px;
+">
+Возможности и состав Геопортала
+</div>
+
+</td>
+
+
+<td style="
+width:52px;
+height:52px;
+border:none;
+vertical-align:middle;
+text-align:center;
+padding:0;
+">
+
+<span class="mw-collapsible-text"
+      style="
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      box-sizing:border-box;
+      width:42px;
+      height:42px;
+      color:#526873;
+      font-size:18px;
+      font-weight:400;
+      line-height:1;
+      ">▼</span>
+
+</td>
+
+</tr>
+</table>
+
+</div>
+
+
+<div class="mw-collapsible-content"
+     style="
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-top:none;
+     border-radius:0 0 11px 11px;
+     padding:16px 18px 18px 18px;
+     color:#4F5D67;
+     line-height:1.55;
+     ">
+
+Система предназначена как единое решение для хранения, консолидации, обработки, обмена и работы с геопространственными данными.
+
+Система реализована на основе отечественных цифровых решений и включает в себя:
+
+# Сбор и предоставление геоданных, их визуализацию, анализ и обработку имеющейся информации пользователями.
+# Модуль для минимизации затрат при анализе газотранспортной инфраструктуры и планирования транспортировки газа потребителям.
+# Инструменты для настройки и загрузки данных в геоинформационный портал, включая создание таблиц БГД, настройку визуального отображения объектов, конфигурацию картографических слоёв и загрузку геоданных из векторных форматов.
+# Реестр, предоставляющий возможность просмотра метаданных о картах и картографических слоях, включая информацию об их создателях, и обеспечивающий навигацию с переходом в геоинформационный портал.
+# Хранение нормативно-справочной информации (НСИ) для поддержания актуальности и целостности данных о пространственных объектах.
+# Модуль для администрирования системы, включая управление пользователями, их правами доступа и разграничение прав на пространственные данные и функциональность геоинформационного портала.
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ПОЛЬЗОВАТЕЛИ СИСТЕМЫ                                      -->
+<!-- ========================================================= -->
+
+<div class="mw-collapsible mw-collapsed"
+     data-expandtext="▼"
+     data-collapsetext="▲"
+     style="
+     margin:0 0 12px 0;
+     ">
+
+<div class="mw-collapsible-toggle"
+     style="
+     float:none;
+     display:block;
+     width:100%;
+     box-sizing:border-box;
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-radius:11px;
+     padding:15px 18px;
+     cursor:pointer;
+     text-align:left;
+     ">
+
+<table style="
+width:100%;
+border-collapse:collapse;
+">
+<tr>
+
+<td style="
+width:48px;
+border:none;
+vertical-align:middle;
+padding:0 14px 0 0;
+">
+
+[[Файл:Geoportal_access.png|40px|link=|alt=Пользователи системы]]
+
+</td>
+
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0;
+">
+
+<div style="
+font-size:18px;
+font-weight:700;
+color:#1F2933;
+">
+Пользователи системы (ДО/ДЗО)
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+margin-top:3px;
+">
+Организации, использующие Геопортал
+</div>
+
+</td>
+
+
+<td style="
+width:52px;
+height:52px;
+border:none;
+vertical-align:middle;
+text-align:center;
+padding:0;
+">
+
+<span class="mw-collapsible-text"
+      style="
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      box-sizing:border-box;
+      width:42px;
+      height:42px;
+      color:#526873;
+      font-size:18px;
+      font-weight:400;
+      line-height:1;
+      ">▼</span>
+
+</td>
+
+</tr>
+</table>
+
+</div>
+
+
+<div class="mw-collapsible-content"
+     style="
+     background:#ffffff;
+     border:1px solid #E1E8EC;
+     border-top:none;
+     border-radius:0 0 11px 11px;
+     padding:16px 18px 18px 18px;
+     color:#4F5D67;
+     line-height:1.55;
+     ">
+
+<!-- СЮДА ВСТАВИТЬ СУЩЕСТВУЮЩИЙ СПИСОК ДО/ДЗО -->
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ТРЕБОВАНИЯ К РАБОЧЕМУ МЕСТУ                               -->
+<!-- ========================================================= -->
+
+<span id="requirements"></span>
+
+<div style="
+font-size:21px;
+font-weight:700;
+color:#1F2933;
+margin-top:30px;
+padding-bottom:7px;
+border-bottom:1px solid #DEE5E9;
+">
+Требования к рабочему месту
+</div>
+
+<!-- СЮДА ВСТАВИТЬ СУЩЕСТВУЮЩУЮ ТАБЛИЦУ ТРЕБОВАНИЙ -->
+
+<div style="
+margin-top:11px;
+padding:15px 18px;
+background:#F7FAFB;
+border-left:4px solid #1687B8;
+line-height:1.5;
+">
+
+Для взаимодействия с системой необходимо использовать современный браузер, например Google Chrome, Microsoft Edge или Яндекс.Браузер. Версия браузера на момент подключения к web-интерфейсу должна быть не старше 2-х лет.
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ОРГАНИЗАЦИЯ ДОСТУПА                                       -->
+<!-- ========================================================= -->
+
+<span id="access"></span>
+
+<div style="
+font-size:21px;
+font-weight:700;
+color:#1F2933;
+margin-top:30px;
+padding-bottom:7px;
+border-bottom:1px solid #DEE5E9;
+">
+Организация доступа
+</div>
+
+<div style="
+padding:16px 19px;
+background:#F7FAFB;
+border-left:4px solid #1687B8;
+margin-top:11px;
+margin-bottom:13px;
+line-height:1.5;
+">
+
+Доступ к информационной системе осуществляется путём подачи заявки в Системе предоставления доступа.
+
+</div>
+
+Для получения доступа необходимо выполнить следующие шаги:
+
+# Войти в браузере в '''Систему предоставления доступа'''.
+# Выбрать '''«Запрос на предоставление доступа к системе/сервису»'''.
+# Выбрать '''«Сервисы» → «Централизованные системы» → «ГеоПортал»'''.
+
+
+<!-- ========================================================= -->
+<!-- ТЕХНИЧЕСКАЯ ПОДДЕРЖКА                                     -->
+<!-- ========================================================= -->
+
+<span id="support"></span>
+
+<div style="
+font-size:21px;
+font-weight:700;
+color:#1F2933;
+margin-top:28px;
+padding-bottom:7px;
+border-bottom:1px solid #DEE5E9;
+">
+Техническая поддержка
+</div>
+
+<div style="
+padding:16px 19px;
+background:#F7FAFB;
+border-left:4px solid #1687B8;
+margin-top:11px;
+margin-bottom:13px;
+line-height:1.5;
+">
+
+Техническая поддержка пол
