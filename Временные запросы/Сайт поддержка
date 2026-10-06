@@ -1,0 +1,428 @@
+__NOTOC__
+
+<!-- ========================================================= -->
+<!-- ВЕРХНЯЯ НАВИГАЦИЯ                                         -->
+<!-- ========================================================= -->
+
+<div style="
+margin:4px 0 20px 0;
+padding:0 16px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+display:flex;
+align-items:center;
+flex-wrap:wrap;
+box-sizing:border-box;
+">
+
+<div style="
+padding:15px 18px 15px 0;
+margin-right:auto;
+font-size:13px;
+font-weight:700;
+white-space:nowrap;
+">
+[[Геопортал|← На главную]]
+</div>
+
+<div style="
+display:flex;
+align-items:center;
+justify-content:flex-end;
+flex-wrap:wrap;
+gap:0 28px;
+">
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Начало работы|Начало работы]]
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Обучение|Обучение]]
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Документация|Документация]]
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/О системе|О системе]]
+</div>
+
+<div style="
+padding:15px 2px 11px 2px;
+font-size:13px;
+font-weight:700;
+color:#1687B8;
+border-bottom:3px solid #1687B8;
+white-space:nowrap;
+">
+Поддержка
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ШАПКА СТРАНИЦЫ                                            -->
+<!-- ========================================================= -->
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:0;
+background:#F3F8FA;
+border:1px solid #E1EBEF;
+border-radius:14px;
+margin-bottom:20px;
+">
+
+<tr>
+
+<td style="
+width:72px;
+vertical-align:middle;
+padding:18px 8px 18px 22px;
+border:none;
+">
+[[Файл:Geoportal_support.png|54px|link=|alt=Техническая поддержка]]
+</td>
+
+<td style="
+vertical-align:middle;
+padding:18px 22px 18px 10px;
+border:none;
+">
+
+<div style="
+font-size:27px;
+font-weight:700;
+color:#1F2933;
+line-height:1.2;
+margin-bottom:5px;
+">
+Техническая поддержка
+</div>
+
+<div style="
+font-size:14px;
+color:#66727D;
+line-height:1.5;
+">
+Куда обратиться при возникновении вопросов или проблем при работе с Геопорталом.
+</div>
+
+</td>
+
+</tr>
+</table>
+
+
+<!-- ========================================================= -->
+<!-- ОСНОВНАЯ ИНФОРМАЦИЯ                                       -->
+<!-- ========================================================= -->
+
+<div style="
+padding:14px 17px;
+background:#F7FAFB;
+border-left:4px solid #1687B8;
+border-radius:0 8px 8px 0;
+font-size:14px;
+color:#4F5D67;
+line-height:1.55;
+margin-bottom:20px;
+">
+
+Техническая поддержка пользователей осуществляется работниками Управления эксплуатации информационных систем и технологий в г. Тюмени ООО «НОВАТЭК – Цифровая Энергия» путём подачи заявок через Систему поддержки пользователей «НОВАСЕРВИС».
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- КАК ПОДАТЬ ЗАЯВКУ                                         -->
+<!-- ========================================================= -->
+
+<div style="
+display:flex;
+align-items:flex-end;
+justify-content:space-between;
+flex-wrap:wrap;
+gap:12px 20px;
+margin-bottom:14px;
+">
+
+<div style="
+flex:1 1 420px;
+min-width:260px;
+">
+
+<div style="
+font-size:22px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:4px;
+">
+Как подать заявку
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+">
+Обращение создаётся в системе поддержки пользователей «НОВАСЕРВИС».
+</div>
+
+</div>
+
+
+<!-- КНОПКА -->
+
+<div style="
+flex:0 0 auto;
+">
+
+<div style="
+display:inline-block;
+background:#1687B8;
+border-radius:8px;
+padding:10px 16px;
+font-size:14px;
+font-weight:700;
+color:#ffffff;
+white-space:nowrap;
+">
+Открыть НОВАСЕРВИС →
+</div>
+
+<!--
+ПОЗЖЕ ЗАМЕНИТЬ НА РЕАЛЬНУЮ ССЫЛКУ
+-->
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ШАГИ                                                      -->
+<!-- ========================================================= -->
+
+<div style="
+display:flex;
+flex-wrap:wrap;
+gap:10px;
+width:100%;
+margin-bottom:22px;
+">
+
+
+<!-- ШАГ 1 -->
+
+<div style="
+flex:1 1 360px;
+min-width:280px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:11px;
+padding:15px 18px;
+">
+
+<div style="
+width:28px;
+height:28px;
+display:flex;
+align-items:center;
+justify-content:center;
+box-sizing:border-box;
+background:#EAF4F8;
+border-radius:50%;
+color:#1687B8;
+font-size:12px;
+font-weight:700;
+margin-bottom:10px;
+">
+1
+</div>
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:4px;
+">
+Войти в НОВАСЕРВИС
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+">
+Открыть в браузере Систему поддержки пользователей «НОВАСЕРВИС».
+</div>
+
+</div>
+
+
+<!-- ШАГ 2 -->
+
+<div style="
+flex:1 1 360px;
+min-width:280px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:11px;
+padding:15px 18px;
+">
+
+<div style="
+width:28px;
+height:28px;
+display:flex;
+align-items:center;
+justify-content:center;
+box-sizing:border-box;
+background:#EAF4F8;
+border-radius:50%;
+color:#1687B8;
+font-size:12px;
+font-weight:700;
+margin-bottom:10px;
+">
+2
+</div>
+
+<div style="
+font-size:16px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:4px;
+">
+Выбрать Геопортал
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+">
+Перейти: '''«Информационные системы» → «Геоинформационный портал (NeoPortal)»'''.
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- FAQ / ИЗВЕСТНЫЕ ПРОБЛЕМЫ                                  -->
+<!-- ========================================================= -->
+
+<div>
+
+<div style="
+font-size:21px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:4px;
+">
+Частые вопросы и известные проблемы
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.45;
+margin-bottom:11px;
+">
+Раздел будет дополняться по мере появления новых материалов.
+</div>
+
+
+<div style="
+padding:13px 16px;
+background:#F8FAFB;
+border:1px solid #E1E8EC;
+border-radius:9px;
+display:flex;
+align-items:center;
+gap:12px;
+">
+
+<div style="
+width:32px;
+height:32px;
+flex:0 0 32px;
+display:flex;
+align-items:center;
+justify-content:center;
+border-radius:7px;
+background:#EAF4F8;
+color:#1687B8;
+font-size:15px;
+font-weight:700;
+">
+?
+</div>
+
+<div style="
+font-size:13px;
+color:#66727D;
+line-height:1.45;
+">
+Материалы по частым вопросам и решениям известных проблем будут размещаться в этом разделе.
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- НИЖНЯЯ НАВИГАЦИЯ                                          -->
+<!-- ========================================================= -->
+
+<div style="
+margin-top:22px;
+padding:13px 17px;
+background:#F3F8FA;
+border-radius:9px;
+display:flex;
+align-items:center;
+justify-content:space-between;
+flex-wrap:wrap;
+gap:10px 20px;
+font-size:14px;
+">
+
+<div>
+[[Геопортал|'''← Вернуться на главную страницу''']]
+</div>
+
+<div>
+[[Геопортал/Начало работы|'''Начало работы →''']]
+</div>
+
+</div>
