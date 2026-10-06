@@ -1,0 +1,564 @@
+__NOTOC__
+
+<!-- ========================================================= -->
+<!-- ВЕРХНЯЯ НАВИГАЦИЯ                                         -->
+<!-- ========================================================= -->
+
+<div style="
+margin:4px 0 24px 0;
+padding:0 16px;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:10px;
+display:flex;
+align-items:center;
+flex-wrap:wrap;
+box-sizing:border-box;
+">
+
+<div style="
+padding:15px 18px 15px 0;
+margin-right:auto;
+font-size:13px;
+font-weight:700;
+white-space:nowrap;
+">
+[[Геопортал|← На главную]]
+</div>
+
+<div style="
+display:flex;
+align-items:center;
+justify-content:flex-end;
+flex-wrap:wrap;
+gap:0 28px;
+">
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Начало работы|Начало работы]]
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Обучение|Обучение]]
+</div>
+
+<div style="
+padding:15px 2px 11px 2px;
+font-size:13px;
+font-weight:700;
+color:#1687B8;
+border-bottom:3px solid #1687B8;
+white-space:nowrap;
+">
+Документация
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/О системе|О системе]]
+</div>
+
+<div style="
+padding:15px 2px 13px 2px;
+font-size:13px;
+white-space:nowrap;
+">
+[[Геопортал/Поддержка|Поддержка]]
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ШАПКА СТРАНИЦЫ                                            -->
+<!-- ========================================================= -->
+
+<table style="
+width:100%;
+border-collapse:separate;
+border-spacing:0;
+background:#F3F8FA;
+border:1px solid #E1EBEF;
+border-radius:14px;
+margin-bottom:28px;
+">
+
+<tr>
+
+<td style="
+width:76px;
+vertical-align:middle;
+padding:20px 8px 20px 24px;
+border:none;
+">
+[[Файл:Geoportal_docs.png|58px|link=|alt=Документация]]
+</td>
+
+<td style="
+vertical-align:middle;
+padding:20px 24px 20px 10px;
+border:none;
+">
+
+<div style="
+font-size:28px;
+font-weight:700;
+color:#1F2933;
+line-height:1.2;
+margin-bottom:6px;
+">
+Документация
+</div>
+
+<div style="
+font-size:15px;
+color:#66727D;
+line-height:1.5;
+">
+Руководства и дополнительные материалы по Геопорталу.
+</div>
+
+</td>
+
+</tr>
+</table>
+
+
+<!-- ========================================================= -->
+<!-- ЕДИНЫЙ СПИСОК ДОКУМЕНТОВ                                  -->
+<!-- ========================================================= -->
+
+<div style="
+width:100%;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+overflow:hidden;
+">
+
+
+<!-- ========================================================= -->
+<!-- ЗАГОЛОВОК: РУКОВОДСТВА                                    -->
+<!-- ========================================================= -->
+
+<div style="
+padding:14px 18px 11px 18px;
+background:#F7FAFB;
+border-bottom:1px solid #E1E8EC;
+">
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+">
+Руководства пользователя
+</div>
+
+</div>
+
+
+<table style="
+width:100%;
+table-layout:fixed;
+border-collapse:collapse;
+">
+
+
+<!-- NEOPORTAL -->
+
+<tr style="height:48px;">
+
+<td style="
+width:95px;
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+ГЕОПОРТАЛ
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+NeoPortal
+</td>
+
+<td style="
+width:100px;
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+
+<!-- ГТЛ -->
+
+<tr style="height:48px;">
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+МОДУЛЬ
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Газотранспортная логистика
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+
+<!-- КАРТ-ДИЗАЙНЕР -->
+
+<tr style="height:48px;">
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+МОДУЛЬ
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Карт-Дизайнер
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+
+<!-- КАТАЛОГ -->
+
+<tr style="height:48px;">
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+КАТАЛОГ
+</td>
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Каталог пространственных данных
+</td>
+
+<td style="
+border:none;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+</table>
+
+
+<!-- ========================================================= -->
+<!-- ЗАГОЛОВОК: ДОПОЛНИТЕЛЬНЫЕ МАТЕРИАЛЫ                       -->
+<!-- ========================================================= -->
+
+<div style="
+padding:14px 18px 11px 18px;
+background:#F7FAFB;
+border-top:1px solid #E1E8EC;
+border-bottom:1px solid #E1E8EC;
+">
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+">
+Дополнительные материалы
+</div>
+
+</div>
+
+
+<table style="
+width:100%;
+table-layout:fixed;
+border-collapse:collapse;
+">
+
+
+<!-- АРХИВ -->
+
+<tr style="height:48px;">
+
+<td style="
+width:95px;
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+ШАБЛОНЫ
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Архив с шаблонами
+</td>
+
+<td style="
+width:100px;
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+
+<!-- ДОКЛАД -->
+
+<tr style="height:48px;">
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+ДОКЛАД
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Доклад о Геопортале
+</td>
+
+<td style="
+border:none;
+border-bottom:1px solid #E8EDF0;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+
+<!-- ВИДЕО -->
+
+<tr style="height:48px;">
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0 10px 0 18px;
+font-size:10px;
+font-weight:700;
+color:#1687B8;
+letter-spacing:0.3px;
+">
+ВИДЕО
+</td>
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0 10px;
+font-size:15px;
+font-weight:700;
+color:#1F2933;
+">
+Инструкция в видеоформате
+</td>
+
+<td style="
+border:none;
+vertical-align:middle;
+text-align:right;
+padding:0 18px 0 8px;
+font-size:12px;
+font-weight:700;
+white-space:nowrap;
+">
+Открыть →
+</td>
+
+</tr>
+
+</table>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ССЫЛКИ ДОБАВИМ ПОЗЖЕ                                     -->
+<!-- ========================================================= -->
+
+<!--
+ПОЗЖЕ ЗАМЕНИМ "Открыть →" НА РЕАЛЬНЫЕ ССЫЛКИ.
+-->
+
+
+<!-- ========================================================= -->
+<!-- НИЖНЯЯ НАВИГАЦИЯ                                          -->
+<!-- ========================================================= -->
+
+<div style="
+margin-top:28px;
+padding:14px 17px;
+background:#F3F8FA;
+border-radius:9px;
+display:flex;
+align-items:center;
+justify-content:space-between;
+flex-wrap:wrap;
+gap:10px 20px;
+font-size:14px;
+">
+
+<div>
+[[Геопортал|'''← Вернуться на главную страницу''']]
+</div>
+
+<div>
+[[Геопортал/О системе|'''О системе →''']]
+</div>
+
+</div>
