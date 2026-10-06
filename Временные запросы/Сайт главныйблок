@@ -1,0 +1,426 @@
+__NOTOC__
+
+<!-- ========================================================= -->
+<!-- ГЛАВНЫЙ БЛОК                                              -->
+<!-- ========================================================= -->
+
+<div style="
+background:#F3F8FA;
+border:1px solid #E1EBEF;
+border-radius:16px;
+padding:20px 30px;
+margin-bottom:24px;
+box-sizing:border-box;
+">
+
+<div style="
+display:flex;
+align-items:center;
+justify-content:space-between;
+flex-wrap:wrap;
+gap:18px;
+">
+
+
+<!-- ТЕКСТ -->
+
+<div style="
+flex:1 1 430px;
+min-width:280px;
+">
+
+<div style="
+font-size:32px;
+font-weight:700;
+color:#1F2933;
+line-height:1.15;
+margin-bottom:10px;
+">
+Геопортал
+</div>
+
+<div style="
+max-width:540px;
+font-size:15px;
+color:#5F6D78;
+line-height:1.5;
+margin-bottom:18px;
+">
+Пространственные данные, инструменты, обучение и материалы для работы в одном месте.
+</div>
+
+<div style="
+display:inline-block;
+background:#1687B8;
+border-radius:9px;
+padding:11px 18px;
+font-size:14px;
+font-weight:700;
+color:#ffffff;
+">
+Открыть Геопортал →
+</div>
+
+<!--
+ПОЗЖЕ ЗАМЕНИТЬ НА РЕАЛЬНУЮ ССЫЛКУ
+-->
+
+</div>
+
+
+<!-- ИЗОБРАЖЕНИЕ -->
+
+<div style="
+flex:0 1 420px;
+min-width:260px;
+text-align:center;
+">
+[[Файл:Geoportal_hero-1.png|450px|link=|alt=Геопортал]]
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- РАЗДЕЛЫ ГЕОПОРТАЛА                                       -->
+<!-- ========================================================= -->
+
+<div style="
+font-size:23px;
+font-weight:700;
+color:#1F2933;
+margin:0 0 5px 2px;
+">
+Разделы Геопортала
+</div>
+
+<div style="
+font-size:14px;
+color:#71808B;
+line-height:1.5;
+margin:0 0 16px 2px;
+">
+Выберите нужный раздел в зависимости от вашей задачи.
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ПЕРВЫЙ РЯД                                                -->
+<!-- ========================================================= -->
+
+<div style="
+display:flex;
+flex-wrap:wrap;
+justify-content:center;
+gap:12px;
+width:100%;
+margin-bottom:12px;
+">
+
+
+<!-- НАЧАЛО РАБОТЫ -->
+
+<div style="
+flex:1 1 280px;
+min-width:270px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px 22px;
+">
+
+<div style="height:46px;margin-bottom:11px;">
+[[Файл:Geoportal_start.png|46px|link=|alt=Начало работы]]
+</div>
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Начало работы
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+min-height:40px;
+">
+Получение доступа и требования к рабочему месту.
+</div>
+
+<div style="
+margin-top:14px;
+font-size:13px;
+font-weight:700;
+">
+[[Геопортал/Начало работы|Перейти →]]
+</div>
+
+</div>
+
+
+<!-- ОБУЧЕНИЕ -->
+
+<div style="
+flex:1 1 280px;
+min-width:270px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px 22px;
+">
+
+<div style="height:46px;margin-bottom:11px;">
+[[Файл:Geoportal_training.png|46px|link=|alt=Обучение]]
+</div>
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Обучение
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+min-height:40px;
+">
+Видеоуроки и пошаговые материалы по работе с Геопорталом.
+</div>
+
+<div style="
+margin-top:14px;
+font-size:13px;
+font-weight:700;
+">
+[[Геопортал/Обучение|Начать обучение →]]
+</div>
+
+</div>
+
+
+<!-- ДОКУМЕНТАЦИЯ -->
+
+<div style="
+flex:1 1 280px;
+min-width:270px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px 22px;
+">
+
+<div style="height:46px;margin-bottom:11px;">
+[[Файл:Geoportal_docs.png|46px|link=|alt=Документация]]
+</div>
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Документация
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+min-height:40px;
+">
+Руководства пользователя и дополнительные материалы.
+</div>
+
+<div style="
+margin-top:14px;
+font-size:13px;
+font-weight:700;
+">
+[[Геопортал/Документация|Открыть документацию →]]
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ВТОРОЙ РЯД                                                -->
+<!-- ========================================================= -->
+
+<div style="
+display:flex;
+flex-wrap:wrap;
+justify-content:center;
+gap:12px;
+width:100%;
+">
+
+
+<!-- О СИСТЕМЕ -->
+
+<div style="
+flex:0 1 31.8%;
+min-width:270px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px 22px;
+">
+
+<div style="height:46px;margin-bottom:11px;">
+[[Файл:Geoportal_access.png|46px|link=|alt=О системе]]
+</div>
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+О системе
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+min-height:40px;
+">
+Назначение, функции и пользователи Геопортала.
+</div>
+
+<div style="
+margin-top:14px;
+font-size:13px;
+font-weight:700;
+">
+[[Геопортал/О системе|Подробнее →]]
+</div>
+
+</div>
+
+
+<!-- ТЕХНИЧЕСКАЯ ПОДДЕРЖКА -->
+
+<div style="
+flex:0 1 31.8%;
+min-width:270px;
+box-sizing:border-box;
+background:#ffffff;
+border:1px solid #E1E8EC;
+border-radius:12px;
+padding:20px 22px;
+">
+
+<div style="height:46px;margin-bottom:11px;">
+[[Файл:Geoportal_support.png|46px|link=|alt=Техническая поддержка]]
+</div>
+
+<div style="
+font-size:19px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:6px;
+">
+Техническая поддержка
+</div>
+
+<div style="
+font-size:13px;
+color:#71808B;
+line-height:1.5;
+min-height:40px;
+">
+Помощь при возникновении вопросов или проблем.
+</div>
+
+<div style="
+margin-top:14px;
+font-size:13px;
+font-weight:700;
+">
+[[Геопортал/Поддержка|Перейти →]]
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ЗАВЕРШАЮЩИЙ БЛОК                                          -->
+<!-- ========================================================= -->
+
+<div style="
+margin-top:24px;
+padding:17px 20px;
+background:#F7FAFB;
+border:1px solid #E1E8EC;
+border-radius:11px;
+box-sizing:border-box;
+">
+
+<table style="
+width:100%;
+border-collapse:collapse;
+">
+<tr>
+
+<td style="
+border:none;
+vertical-align:middle;
+padding:0 20px 0 0;
+">
+
+<div style="
+font-size:17px;
+font-weight:700;
+color:#1F2933;
+margin-bottom:5px;
+">
+Геопортал в работе
+</div>
+
+<div style="
+font-size:13px;
+color:#66727D;
+line-height:1.55;
+max-width:900px;
+">
+Геопортал объединяет пространственные данные и инструменты для их просмотра, анализа и использования в работе. Система обеспечивает единый доступ к картографической информации и связанным сервисам.
+</div>
+
+</td>
+
+<td style="
+width:150px;
+border:none;
+vertical-align:middle;
+text-align:right;
+padding:0;
+font-size:13px;
+font-weight:700;
+white-space:nowrap;
+">
+[[Геопортал/О системе|Подробнее о системе →]]
+</td>
+
+</tr>
+</table>
+
+</div>
