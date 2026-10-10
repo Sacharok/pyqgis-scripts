@@ -1,0 +1,5 @@
+SELECT
+    current_database() AS database_name,
+    inet_server_addr() AS server_ip,
+    current_user AS username,
+    pg_size_pretty(pg_database_size(current_database())) AS database_size;
