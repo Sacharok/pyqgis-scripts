@@ -1,0 +1,1 @@
+sudo -n -u postgres vacuumdb --all --full --analyze --verbose --port=5432
